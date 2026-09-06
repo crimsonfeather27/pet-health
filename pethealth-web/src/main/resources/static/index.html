@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PetHealth · 宠物健康管家</title>
+
+    <!-- 品牌字体 Instrument Serif（Logo） -->
+    <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+    <!-- 图表库 ECharts -->
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <!-- 图标库 Lucide -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <!-- 核心样式 -->
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- 导航栏（10.5 节） -->
+    <header>
+        <div class="header-container">
+            <div class="logo">
+                <h1>PetHealth</h1>
+            </div>
+            <nav>
+                <ul>
+                    <li><a href="#home" class="nav-link" onclick="showSection('home')">首页</a></li>
+                    <li><a href="#pets" class="nav-link" onclick="showSection('pets')">宠物档案</a></li>
+                    <li><a href="#health-records" class="nav-link" onclick="showSection('health-records')">健康记录</a></li>
+                    <li><a href="#ai-diagnosis" class="nav-link" onclick="showSection('ai-diagnosis')">AI 健康助手</a></li>
+                    <li><a href="#community" class="nav-link" onclick="showSection('community')">宠物社区</a></li>
+                    <li><a href="#nutrition" class="nav-link" onclick="showSection('nutrition')">营养助手</a></li>
+                    <li><a href="#reminders" class="nav-link" onclick="showSection('reminders')">提醒中心</a></li>
+                </ul>
+            </nav>
+            <div id="user-section">
+                <button class="btn btn-secondary" onclick="showLoginModal()">登录</button>
+                <button class="btn btn-primary" onclick="showRegisterModal()">注册</button>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <!-- ====== 首页 ====== -->
+        <section id="home" class="active">
+            <h2 style="display:none">首页</h2>
+
+            <!-- Hero 品牌区 -->
+            <div class="home-hero">
+                <div class="hero-content">
+                    <div class="hero-badge">
+                        <span class="dot"></span>
+                        宠物健康管家 · 一站式平台
+                    </div>
+                    <h2 class="hero-logo">Pet<span>Health</span></h2>
+                    <p class="hero-tagline">— 让每一只毛孩子都被好好照顾 —</p>
+                    <h3 class="hero-title">All your pet's health,<br><span class="highlight">in one place.</span></h3>
+                    <p class="hero-desc">记录健康数据、按时提醒就医、AI 辅助诊断 —— 用科技让养宠更轻松、更安心。</p>
+                    <div class="hero-actions">
+                        <a class="btn btn-primary" href="#pets" onclick="showSection('pets')">开始管理宠物健康</a>
+                        <a class="btn btn-secondary" href="#ai-diagnosis" onclick="showSection('ai-diagnosis')">了解 AI 助手 →</a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 核心功能入口 -->
+            <div class="home-features">
+                <div class="home-section-head">
+                    <p class="section-label">核心功能</p>
+                    <h3 class="section-title">全方位守护 <span class="serif">毛孩子</span> 的健康</h3>
+                    <p class="section-desc">六大模块，覆盖宠物健康管理的每一个环节</p>
+                </div>
+                <div class="features-grid">
+                    <a class="feature-card" href="#pets" onclick="showSection('pets')">
+                        <h4>宠物档案</h4>
+                        <p>疫苗、驱虫、体检、就医史一站式记录</p>
+                    </a>
+                    <a class="feature-card" href="#health-records" onclick="showSection('health-records')">
+                        <h4>健康追踪</h4>
+                        <p>体重、体温等健康数据趋势可视化</p>
+                    </a>
+                    <a class="feature-card" href="#ai-diagnosis" onclick="showSection('ai-diagnosis')">
+                        <h4>AI 健康助手</h4>
+                        <p>描述症状，获得 AI 初步诊断建议</p>
+                    </a>
+                    <a class="feature-card" href="#reminders" onclick="showSection('reminders')">
+                        <h4>智能提醒</h4>
+                        <p>疫苗、驱虫到期自动提醒</p>
+                    </a>
+                    <a class="feature-card" href="#nutrition" onclick="showSection('nutrition')">
+                        <h4>营养助手</h4>
+                        <p>科学公式计算每日热量与喂食量</p>
+                    </a>
+                    <a class="feature-card" href="#community" onclick="showSection('community')">
+                        <h4>宠物社区</h4>
+                        <p>与千万宠主交流养宠经验</p>
+                    </a>
+                </div>
+            </div>
+
+            <!-- 社区动态 + 到期提醒 -->
+            <div class="home-story">
+                <div class="home-story-inner">
+                    <div class="home-story-text">
+                        <p class="section-label">社区动态</p>
+                        <h3 class="section-title">热门 <span class="serif">讨论</span></h3>
+                        <p class="section-desc">看看其他宠主都在聊什么，分享你的养宠心得。</p>
+                        <a class="btn btn-secondary" href="#community" onclick="showSection('community')">进入社区 →</a>
+                    </div>
+                    <div class="home-story-visual">
+                        <div class="home-panel">
+                            <h4>热门社区</h4>
+                            <div id="hot-posts-list"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="home-story-inner">
+                    <div class="home-story-visual">
+                        <div class="home-panel">
+                            <h4>即将到期提醒</h4>
+                            <div id="due-reminders-list"></div>
+                        </div>
+                    </div>
+                    <div class="home-story-text">
+                        <p class="section-label">健康守护</p>
+                        <h3 class="section-title">从不 <span class="serif">错过</span> 重要节点</h3>
+                        <p class="section-desc">疫苗、驱虫、体检即将到期？PetHealth 提前为您安排。</p>
+                        <a class="btn btn-secondary" href="#reminders" onclick="showSection('reminders')">查看提醒 →</a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- CTA -->
+            <div class="home-cta">
+                <h3>和 <span>PetHealth</span> 一起，守护毛孩子的健康</h3>
+                <p>立即加入宠主的行列，用科技让养宠更轻松、更安心。</p>
+                <a class="btn btn-primary" href="#pets" onclick="showSection('pets')">开始使用</a>
+            </div>
+
+            <!-- 页脚 -->
+            <div class="home-footer">
+                <span class="home-footer-brand">Pet<span>Health</span> · 宠物健康管家</span>
+                <span>© 2026 PetHealth · 用心守护每一只毛孩子</span>
+            </div>
+        </section>
+
+        <!-- ====== 宠物档案 ====== -->
+        <section id="pets">
+            <div class="section-header-row">
+                <h2>宠物档案</h2>
+                <button class="btn btn-primary" onclick="showPetFormModal()">添加新宠物</button>
+            </div>
+            <div id="pets-container" class="pets-grid"></div>
+        </section>
+
+        <!-- ====== 健康记录 ====== -->
+        <section id="health-records">
+            <h2>健康记录</h2>
+            <div class="card-glow" style="margin-bottom:1rem">
+                <div class="form-group" style="display:flex;gap:0.5rem;align-items:flex-end;flex-wrap:wrap">
+                    <div>
+                        <label>选择宠物</label>
+                        <select id="hr-pet-select" onchange="loadHealthTrend()">
+                            <option value="">请选择宠物</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label>统计周期</label>
+                        <select id="hr-period-select" onchange="loadHealthTrend()">
+                            <option value="weekly" selected>本周</option>
+                            <option value="monthly">本月</option>
+                        </select>
+                    </div>
+                    <button class="btn btn-secondary" onclick="loadHealthTrend()">刷新</button>
+                    <button class="btn btn-primary" onclick="showHealthRecordFormModal()">添加记录</button>
+                </div>
+                <div id="hr-stats-summary" class="hr-stats-grid"></div>
+            </div>
+            <div id="hr-chart-filters" class="hr-chart-filters"></div>
+            <div id="trend-chart"></div>
+            <h3 style="margin-top:1.5rem">记录明细</h3>
+            <div id="health-records-list"></div>
+        </section>
+
+        <!-- ====== AI 健康助手 ====== -->
+        <section id="ai-diagnosis">
+            <h2>AI 健康助手</h2>
+            <div class="card-glow">
+                <div class="form-group">
+                    <label>选择宠物</label>
+                    <select id="diag-pet-select">
+                        <option value="">加载中...</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>描述症状</label>
+                    <textarea id="diag-symptoms" rows="4"
+                        placeholder="例如：今天没精神，不爱动，也不太吃东西，还偶尔打喷嚏"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>持续时间</label>
+                    <select id="diag-duration">
+                        <option>半天</option><option selected>1天</option>
+                        <option>2-3天</option><option>一周以上</option>
+                    </select>
+                </div>
+                <button class="btn btn-primary" onclick="submitDiagnosis()">开始 AI 诊断</button>
+                <button class="btn btn-secondary" style="margin-left:0.5rem" onclick="showHealthReportModal()">生成健康报告</button>
+                <div id="ai-result"></div>
+            </div>
+        </section>
+
+        <!-- ====== 社区 ====== -->
+        <section id="community">
+            <div class="section-header-row">
+                <h2>宠物社区</h2>
+                <button class="btn btn-primary" onclick="showPostFormModal()">发布新帖</button>
+            </div>
+            <div id="posts-container"></div>
+        </section>
+
+        <!-- ====== 营养助手 ====== -->
+        <section id="nutrition">
+            <div class="section-header-row">
+                <h2>营养助手</h2>
+            </div>
+            <div class="card-glow" style="margin-bottom:1rem">
+                <div class="form-group" style="margin-bottom:0">
+                    <label>选择宠物</label>
+                    <select id="nt-pet-select" onchange="loadNutritionReport()">
+                        <option value="">（请先在宠物档案页添加宠物）</option>
+                    </select>
+                </div>
+            </div>
+            <div id="nutrition-container"></div>
+        </section>
+
+        <!-- ====== 提醒 ====== -->
+        <section id="reminders">
+            <div class="section-header-row">
+                <h2>提醒中心</h2>
+                <button class="btn btn-primary" onclick="showReminderFormModal()">添加新提醒</button>
+            </div>
+            <div id="reminders-container"></div>
+        </section>
+
+        <!-- ====== 消息通知 ====== -->
+        <section id="notifications">
+            <div class="section-header-row">
+                <h2><i data-lucide="bell"></i> 消息通知</h2>
+                <button class="btn btn-secondary" onclick="markAllNotificationsRead()">全部已读</button>
+            </div>
+            <div id="notifications-container"></div>
+        </section>
+
+        <!-- ====== 我的帖子 ====== -->
+        <section id="my-posts">
+            <div class="section-header-row">
+                <h2>我的帖子</h2>
+                <button class="btn btn-primary" onclick="showPostFormModal()">发布新帖</button>
+            </div>
+            <div id="my-posts-container"></div>
+        </section>
+    </main>
+
+    <!-- 核心脚本 -->
+    <script src="script.js"></script>
+</body>
+</html>

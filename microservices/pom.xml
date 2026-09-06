@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.pethealth</groupId>
+        <artifactId>pethealth</artifactId>
+        <version>1.0.0</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+
+    <artifactId>pethealth-microservices</artifactId>
+    <packaging>pom</packaging>
+    <name>PetHealth · Microservices Parent</name>
+    <description>微服务父 POM —— 统一管理 Dubbo / Nacos / Spring Cloud 版本</description>
+
+    <modules>
+        <module>../pet-service</module>
+        <module>../health-record-service</module>
+        <module>../reminder-service</module>
+    </modules>
+
+</project>

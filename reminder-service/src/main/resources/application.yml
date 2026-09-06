@@ -1,0 +1,69 @@
+server:
+  port: 8084
+
+spring:
+  application:
+    name: reminder-service
+  data:
+    mongodb:
+      host: localhost
+      port: 27017
+      # 统一使用 pethealth_web 库（与 pethealth-web 共享 reminders 集合，
+      # 保证 Dubbo 路径与 web 降级本地 Repository 读写同一份数据）
+      database: pethealth_web
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: guest
+    password: guest
+
+dubbo:
+  application:
+    name: reminder-service
+  protocol:
+    name: dubbo
+    port: 20884
+  registry:
+    address: N/A
+  provider:
+    timeout: 5000
+  qos:
+    enable: false
+  serialize:
+    security:
+      check:
+        serializable: false
+
+mail:
+  smtp-host: ${SMTP_HOST:smtp.example.com}
+  smtp-port: ${SMTP_PORT:465}
+  smtp-user: ${SMTP_USER:}
+  smtp-password: ${SMTP_PASSWORD:}
+  from: ${MAIL_FROM:pethealth@example.com}
+
+reminder:
+  scheduler-interval-seconds: 60
+  default-advance-days: 7
+
+logging:
+  level:
+    org.springframework.data.mongodb: DEBUG
+    com.pethealth: DEBUG
+
+# Actuator 监控端点
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+        exclude: ""
+      base-path: /actuator
+  endpoint:
+    health:
+      show-details: always
+  health:
+    rabbit:
+      enabled: false  # RabbitMQ 健康检查不参与整体状态（可降级）
+  metrics:
+    tags:
+      application: ${spring.application.name}

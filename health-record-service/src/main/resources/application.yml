@@ -1,0 +1,71 @@
+server:
+  port: 8086
+
+spring:
+  application:
+    name: health-record-service
+  data:
+    mongodb:
+      host: localhost
+      port: 27017
+      # 统一使用 pethealth_web 库（与 pethealth-web 共享 health_records 集合，
+      # 保证 Dubbo 路径与 web 降级本地 Repository 读写同一份数据）
+      database: pethealth_web
+    redis:
+      host: localhost
+      port: 6379
+      database: 2
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: guest
+    password: guest
+    virtual-host: /
+
+dubbo:
+  application:
+    name: health-record-service
+  protocol:
+    name: dubbo
+    port: 20885
+  registry:
+    address: N/A
+  provider:
+    timeout: 10000
+    retries: 0
+  qos:
+    enable: false
+  serialize:
+    security:
+      check:
+        serializable: false
+
+llm:
+  api-url: ${LLM_API_URL:https://api.deepseek.com/v1/chat/completions}
+  api-key: ${LLM_API_KEY:sk-b89356f8341d441cbcec8de951101049}
+  model: ${LLM_MODEL:deepseek-v4-flash}
+  max-tokens: 4096
+  temperature: 0.7
+
+logging:
+  level:
+    org.springframework.data.mongodb: DEBUG
+    com.pethealth: DEBUG
+
+# Actuator 监控端点
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+        exclude: ""
+      base-path: /actuator
+  endpoint:
+    health:
+      show-details: always
+  health:
+    rabbit:
+      enabled: false  # RabbitMQ 健康检查不参与整体状态（可降级）
+  metrics:
+    tags:
+      application: ${spring.application.name}

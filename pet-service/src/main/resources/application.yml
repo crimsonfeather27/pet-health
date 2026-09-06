@@ -1,0 +1,54 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: pet-service
+  data:
+    mongodb:
+      host: localhost
+      port: 27017
+      # 与 pethealth-web 共享同一份 pet_profiles 集合：
+      # 保证 Dubbo 正常路径与 web 降级本地 Repository 读写的数据完全一致
+      database: pethealth_web
+
+dubbo:
+  application:
+    name: pet-service
+  protocol:
+    name: dubbo
+    port: 20881
+  registry:
+    address: N/A
+  provider:
+    timeout: 5000
+    retries: 0
+  qos:
+    enable: false
+  serialize:
+    security:
+      check:
+        serializable: false
+
+logging:
+  level:
+    org.springframework.data.mongodb: DEBUG
+    com.pethealth: DEBUG
+
+# Actuator 监控端点
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+        exclude: ""
+      base-path: /actuator
+  endpoint:
+    health:
+      show-details: always
+  health:
+    rabbit:
+      enabled: false  # RabbitMQ 健康检查不参与整体状态（可降级）
+  metrics:
+    tags:
+      application: ${spring.application.name}
