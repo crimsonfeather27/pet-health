@@ -25,10 +25,6 @@ dubbo:
     retries: 0
   qos:
     enable: false
-  serialize:
-    security:
-      check:
-        serializable: false
 
 logging:
   level:
@@ -46,9 +42,6 @@ management:
   endpoint:
     health:
       show-details: always
-  health:
-    rabbit:
-      enabled: false  # RabbitMQ 健康检查不参与整体状态（可降级）
   metrics:
     tags:
       application: ${spring.application.name}

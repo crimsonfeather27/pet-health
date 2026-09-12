@@ -16,9 +16,10 @@
     <version>1.0.0</version>
     <packaging>pom</packaging>
     <name>PetHealth · 宠物健康管家</name>
-    <description>一站式宠物健康管理平台 · Spring Boot 3.2 + Dubbo + MongoDB + Redis + RabbitMQ + AI</description>
+    <description>一站式宠物健康管理平台 · Spring Boot 3.2 + Dubbo + MongoDB + Redis + AI</description>
 
     <modules>
+        <module>pethealth-api</module>
         <module>microservices</module>
         <module>pethealth-web</module>
     </modules>

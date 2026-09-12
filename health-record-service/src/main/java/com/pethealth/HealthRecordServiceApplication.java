@@ -7,7 +7,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 /**
  * Health Record Service · 健康记录 + AI 诊断微服务
  * <p>
- * HTTP 端口 8086 · Dubbo 端口 20885 · MongoDB: pethealth_record · RabbitMQ
+ * HTTP 端口 8086 · Dubbo 端口 20885 · MongoDB: pethealth_record
  */
 @SpringBootApplication
 @EnableDubbo

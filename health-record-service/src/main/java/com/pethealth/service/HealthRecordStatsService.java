@@ -4,12 +4,16 @@ import com.pethealth.entity.HealthRecord;
 import com.pethealth.repository.HealthRecordRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.stereotype.Service;
 
 import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.YearMonth;
 import java.time.temporal.TemporalAdjusters;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
@@ -17,9 +21,13 @@ import java.util.concurrent.TimeUnit;
 /**
  * 宠物健康记录周/月聚合统计服务
  * <p>
- * 缓存键设计（设计文档 4.12 节）:
- * - pethealth:pet:{petId}:weekly-stats  → Hash，本周聚合，TTL 7 天
- * - pethealth:pet:{petId}:monthly-stats → Hash，本月聚合，TTL 30 天
+ * 缓存键设计（设计文档 4.12 节 + #13 周期起点防串期）:
+ * - pethealth:pet:{petId}:weekly-stats:{本周一日期} → Hash，TTL 7 天
+ * - pethealth:pet:{petId}:monthly-stats:{yyyy-MM}  → Hash，TTL 30 天
+ * <p>
+ * 键中带周期起点：跨周/跨月后自然读写新键，旧周期缓存靠 TTL 自然过期，
+ * 从根本上避免"上周日缓存的周统计被本周一继续命中"的串期脏读。
+ * 失效时按 petId 前缀 SCAN 渐进式删除该宠物所有周期的键（#11 失效对称）。
  */
 @Slf4j
 @Service
@@ -29,8 +37,11 @@ public class HealthRecordStatsService {
     private final HealthRecordRepository healthRecordRepository;
     private final RedisTemplate<String, Object> redisTemplate;
 
-    private static final String WEEKLY_KEY_PREFIX  = "pethealth:pet:%s:weekly-stats";
-    private static final String MONTHLY_KEY_PREFIX = "pethealth:pet:%s:monthly-stats";
+    private static final String WEEKLY_KEY_PREFIX  = "pethealth:pet:%s:weekly-stats:";
+    private static final String MONTHLY_KEY_PREFIX = "pethealth:pet:%s:monthly-stats:";
+    /** 旧格式键（无周期起点后缀），升级后做一次兼容清理 */
+    private static final String WEEKLY_KEY_LEGACY  = "pethealth:pet:%s:weekly-stats";
+    private static final String MONTHLY_KEY_LEGACY = "pethealth:pet:%s:monthly-stats";
     private static final long   WEEKLY_TTL_DAYS    = 7;
     private static final long   MONTHLY_TTL_DAYS   = 30;
 
@@ -43,9 +54,10 @@ public class HealthRecordStatsService {
      */
     public Map<String, Object> getStats(String petId, String period) {
         boolean isMonthly = "monthly".equalsIgnoreCase(period);
+        LocalDate today = LocalDate.now();
         String cacheKey = isMonthly
-                ? String.format(MONTHLY_KEY_PREFIX, petId)
-                : String.format(WEEKLY_KEY_PREFIX, petId);
+                ? monthlyKey(petId, YearMonth.from(today))
+                : weeklyKey(petId, today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY)));
 
         // 1. 尝试 Redis Hash 缓存
         try {
@@ -94,18 +106,48 @@ public class HealthRecordStatsService {
     }
 
     /**
-     * 新增/更新/删除健康记录时，失效该宠物的所有统计缓存
+     * 新增/更新/删除健康记录、删除宠物档案时，失效该宠物所有周期的统计缓存
      */
     public void invalidateCache(String petId) {
         try {
-            redisTemplate.delete(Arrays.asList(
-                    String.format(WEEKLY_KEY_PREFIX, petId),
-                    String.format(MONTHLY_KEY_PREFIX, petId)
-            ));
-            log.debug("已失效健康统计缓存: petId={}", petId);
+            Set<String> keys = new HashSet<>();
+            keys.addAll(scanKeys("pethealth:pet:" + petId + ":weekly-stats:*"));
+            keys.addAll(scanKeys("pethealth:pet:" + petId + ":monthly-stats:*"));
+            // 兼容清理旧格式键（升级前写入的残留，靠 TTL 兜底过期）
+            keys.add(String.format(WEEKLY_KEY_LEGACY, petId));
+            keys.add(String.format(MONTHLY_KEY_LEGACY, petId));
+            if (!keys.isEmpty()) {
+                redisTemplate.delete(keys);
+            }
+            log.debug("已失效健康统计缓存: petId={}, keys={}", petId, keys.size());
         } catch (Exception e) {
             log.warn("Redis 失效失败（非关键）: {}", e.getMessage());
         }
+    }
+
+    /** 周键：周期起点为本周一 */
+    private String weeklyKey(String petId, LocalDate monday) {
+        return String.format(WEEKLY_KEY_PREFIX, petId) + monday;
+    }
+
+    /** 月键：周期起点为 yyyy-MM */
+    private String monthlyKey(String petId, YearMonth month) {
+        return String.format(MONTHLY_KEY_PREFIX, petId) + month;
+    }
+
+    /** SCAN 渐进式匹配键（避免 KEYS 阻塞 Redis） */
+    private Set<String> scanKeys(String pattern) {
+        Set<String> keys = new HashSet<>();
+        redisTemplate.execute((RedisCallback<Void>) connection -> {
+            try (Cursor<byte[]> cursor = connection.scan(
+                    ScanOptions.scanOptions().match(pattern).count(200).build())) {
+                while (cursor.hasNext()) {
+                    keys.add(new String(cursor.next()));
+                }
+            }
+            return null;
+        });
+        return keys;
     }
 
     /**

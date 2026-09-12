@@ -6,6 +6,7 @@ import com.pethealth.interceptor.AuthInterceptor;
 import com.pethealth.service.AuthService;
 import com.pethealth.service.UserService;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
@@ -17,11 +18,11 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.UUID;
 
 @Slf4j
@@ -44,36 +45,74 @@ public class UserController {
     }
 
     /**
-     * POST /api/users/login — 用户登录，生成 Redis Token
-     * 返回 {token, user}
+     * POST /api/users/login — 用户登录
+     * <p>
+     * 登录成功后通过 HttpOnly Cookie 下发 Token（#6），前端无需也无法读取 Token，
+     * 浏览器自动在后续请求中携带 Cookie，从根本上避免 XSS 窃取 Token。
+     * 响应体仅返回用户信息，不再返回 Token。
      */
     @PostMapping("/login")
-    public ApiResponse<Map<String, Object>> login(@Valid @RequestBody LoginRequest req) {
+    public ApiResponse<User> login(@Valid @RequestBody LoginRequest req,
+                                   HttpServletRequest request, HttpServletResponse response) {
         return userService.login(req.getUsername(), req.getPassword())
                 .map(user -> {
                     String token = authService.createToken(user);
                     user.setPassword(null);
-                    Map<String, Object> data = new HashMap<>();
-                    data.put("token", token);
-                    data.put("user", user);
-                    log.info("用户 {} 登录成功，颁发 Token", user.getUsername());
-                    return ApiResponse.success("登录成功", data);
+                    setAuthCookie(response, token, request.isSecure());
+                    log.info("用户 {} 登录成功，颁发 HttpOnly Cookie", user.getUsername());
+                    return ApiResponse.success("登录成功", user);
                 })
                 .orElse(ApiResponse.error(401, "用户名或密码错误"));
     }
 
     /**
-     * POST /api/users/logout — 登出，删除 Redis Token
+     * POST /api/users/logout — 登出
+     * <p>
+     * 清除 Redis Token 并下发过期 Cookie 覆盖前端。
      */
     @PostMapping("/logout")
-    public ApiResponse<Void> logout(HttpServletRequest request) {
-        String authHeader = request.getHeader("Authorization");
-        if (authHeader != null && authHeader.startsWith("Bearer ")) {
-            String token = authHeader.substring(7).trim();
+    public ApiResponse<Void> logout(HttpServletRequest request, HttpServletResponse response) {
+        String token = resolveToken(request);
+        if (token != null) {
             boolean invalidated = authService.invalidate(token);
             log.info("登出，Token 已删除: {}", invalidated ? "成功" : "已过期或不存在");
         }
+        clearAuthCookie(response, request.isSecure());
         return ApiResponse.success("已登出", null);
+    }
+
+    /** 下发 HttpOnly Cookie */
+    private void setAuthCookie(HttpServletResponse response, String token, boolean secure) {
+        String cookie = AuthInterceptor.COOKIE_NAME + "=" + URLEncoder.encode(token, StandardCharsets.UTF_8)
+                + "; Path=/; Max-Age=" + AuthInterceptor.COOKIE_MAX_AGE
+                + "; HttpOnly; SameSite=Lax"
+                + (secure ? "; Secure" : "");
+        response.addHeader("Set-Cookie", cookie);
+    }
+
+    /** 清除 Cookie（下发过期值覆盖） */
+    private void clearAuthCookie(HttpServletResponse response, boolean secure) {
+        String cookie = AuthInterceptor.COOKIE_NAME + "=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"
+                + (secure ? "; Secure" : "");
+        response.addHeader("Set-Cookie", cookie);
+    }
+
+    /** 从 Cookie / Header 中取 Token（与 AuthInterceptor 保持一致） */
+    private String resolveToken(HttpServletRequest request) {
+        jakarta.servlet.http.Cookie[] cookies = request.getCookies();
+        if (cookies != null) {
+            for (jakarta.servlet.http.Cookie c : cookies) {
+                if (AuthInterceptor.COOKIE_NAME.equals(c.getName())
+                        && c.getValue() != null && !c.getValue().isBlank()) {
+                    return c.getValue();
+                }
+            }
+        }
+        String authHeader = request.getHeader("Authorization");
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            return authHeader.substring(7).trim();
+        }
+        return null;
     }
 
     /**
@@ -101,10 +140,18 @@ public class UserController {
     }
 
     /**
-     * PUT /api/users/{id} — 更新用户资料
+     * PUT /api/users/{id} — 更新用户资料（仅本人）
      */
     @PutMapping("/{id}")
-    public ApiResponse<User> update(@PathVariable String id, @RequestBody User updates) {
+    public ApiResponse<User> update(@PathVariable String id, @RequestBody User updates,
+                                    HttpServletRequest request) {
+        String userId = (String) request.getAttribute(AuthInterceptor.CURRENT_USER_ID);
+        if (userId == null) {
+            return ApiResponse.error(401, "未登录或 Token 已失效");
+        }
+        if (!userId.equals(id)) {
+            return ApiResponse.error(403, "无权修改他人资料");
+        }
         User user = userService.update(id, updates);
         user.setPassword(null);
         return ApiResponse.success(user);

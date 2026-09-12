@@ -2,13 +2,11 @@ package com.pethealth.service;
 
 import com.pethealth.entity.PetProfile;
 import com.pethealth.entity.Reminder;
+import com.pethealth.exception.AccessDeniedException;
 import com.pethealth.repository.PetProfileRepository;
 import com.pethealth.repository.ReminderRepository;
-import com.pethealth.repository.UserRepository;
-import com.pethealth.entity.User;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -18,9 +16,7 @@ import java.util.List;
 /**
  * 提醒服务
  * <p>
- * 两种触发链路：
- * 1. RabbitMQ 可用 → DelayMessageProducer 发延迟消息
- * 2. RabbitMQ 不可用 → 仅存 MongoDB，ReminderScheduler 兜底扫描
+ * 到期触发由 ReminderScheduler 定时扫描完成（个人项目站内提醒，无需外部推送）。
  */
 @Slf4j
 @Service
@@ -29,8 +25,6 @@ public class ReminderService {
 
     private final ReminderRepository reminderRepository;
     private final PetProfileRepository petProfileRepository;
-    private final UserRepository userRepository;
-    private final ObjectProvider<DelayMessageProducer> delayMessageProducerProvider;
 
     /**
      * 创建提醒
@@ -47,22 +41,8 @@ public class ReminderService {
                 if (reminder.getOwnerId() == null) reminder.setOwnerId(pet.getOwnerId());
             });
         }
-        if (reminder.getOwnerId() != null && reminder.getEmail() == null) {
-            userRepository.findById(reminder.getOwnerId()).ifPresent(user -> {
-                reminder.setEmail(user.getEmail());
-            });
-        }
-
         Reminder saved = reminderRepository.save(reminder);
         log.info("创建提醒: id={}, title={}, remindAt={}", saved.getId(), saved.getTitle(), saved.getRemindAt());
-
-        // 尝试发延迟消息（RabbitMQ 可用时）
-        DelayMessageProducer producer = delayMessageProducerProvider.getIfAvailable();
-        if (producer != null) {
-            producer.sendDelayedReminder(saved);
-        } else {
-            log.debug("RabbitMQ 未启用，提醒将由 ReminderScheduler 定时扫描触发");
-        }
 
         return saved;
     }
@@ -154,10 +134,11 @@ public class ReminderService {
     }
 
     /**
-     * 取消提醒
+     * 取消提醒（仅提醒属主）
      */
-    public Reminder cancel(String id) {
+    public Reminder cancel(String id, String currentUserId) {
         return reminderRepository.findById(id).map(r -> {
+            checkOwner(currentUserId, r.getOwnerId());
             r.setStatus("CANCELLED");
             r.setUpdatedAt(LocalDateTime.now());
             return reminderRepository.save(r);
@@ -165,10 +146,11 @@ public class ReminderService {
     }
 
     /**
-     * 确认提醒
+     * 确认提醒（仅提醒属主）
      */
-    public Reminder acknowledge(String id) {
+    public Reminder acknowledge(String id, String currentUserId) {
         return reminderRepository.findById(id).map(r -> {
+            checkOwner(currentUserId, r.getOwnerId());
             r.setStatus("ACKNOWLEDGED");
             r.setUpdatedAt(LocalDateTime.now());
             return reminderRepository.save(r);
@@ -176,13 +158,14 @@ public class ReminderService {
     }
 
     /**
-     * 编辑提醒（仅 PENDING 待发送状态允许修改；已发送/已确认/已取消不可编辑）
+     * 编辑提醒（仅 PENDING 待发送状态允许修改，且仅提醒属主；已发送/已确认/已取消不可编辑）
      */
-    public Reminder update(String id, Reminder patch) {
+    public Reminder update(String id, Reminder patch, String currentUserId) {
         return reminderRepository.findById(id).map(r -> {
             if (!"PENDING".equals(r.getStatus())) {
                 return null; // 非待发送状态锁定，不允许编辑
             }
+            checkOwner(currentUserId, r.getOwnerId());
             // 逐字段覆盖（只允许编辑人可控字段）
             if (patch.getTitle() != null) r.setTitle(patch.getTitle());
             if (patch.getType() != null) r.setType(patch.getType());
@@ -200,12 +183,21 @@ public class ReminderService {
     }
 
     /**
-     * 删除提醒（物理删除）
+     * 删除提醒（物理删除，仅提醒属主）
      */
-    public boolean delete(String id) {
-        if (!reminderRepository.existsById(id)) return false;
+    public boolean delete(String id, String currentUserId) {
+        Reminder r = reminderRepository.findById(id).orElse(null);
+        if (r == null) return false;
+        checkOwner(currentUserId, r.getOwnerId());
         reminderRepository.deleteById(id);
         log.info("删除提醒: id={}", id);
         return true;
+    }
+
+    /** 属主校验：非属主操作他人提醒视为水平越权 */
+    private void checkOwner(String currentUserId, String ownerId) {
+        if (currentUserId == null || !currentUserId.equals(ownerId)) {
+            throw new AccessDeniedException("无权操作他人提醒");
+        }
     }
 }

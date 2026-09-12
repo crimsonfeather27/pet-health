@@ -2,29 +2,34 @@
 const AppState = {
     currentSection: 'home',
     currentUser: null,
-    token: localStorage.getItem('pethealth_token') || null,
     petCache: [],
     postCache: [],
 };
 
+// ===================== 文本安全转义（全局唯一出口） =====================
+// 转义 & < > " ' 五个字符，所有 UGC 文本插值与表单回填统一走这里
+function escHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g,
+        c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+// 兼容旧调用点（原 showPostFormModal 内局部 esc）
+function esc(v) { return escHtml(v); }
+
 // ===================== 通用 API 封装 =====================
+// Token 已改为 HttpOnly Cookie（#6）：前端不再持有 / 发送 Authorization 头，
+// 浏览器自动携带 Cookie。credentials: 'same-origin' 确保 fetch 附带 Cookie。
 async function api(method, url, body = null) {
     const opts = {
         method,
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
     };
-    // 自动携带 Token（登录/注册接口本身除外）
-    if (AppState.token && !url.endsWith('/login') && !url.endsWith('/register')) {
-        opts.headers['Authorization'] = 'Bearer ' + AppState.token;
-    }
     if (body) opts.body = JSON.stringify(body);
 
     const res = await fetch(url, opts);
     if (res.status === 401) {
         // Token 失效，清登录态
-        AppState.token = null;
         AppState.currentUser = null;
-        localStorage.removeItem('pethealth_token');
         updateUserSection();
         throw new Error('登录已失效，请重新登录');
     }
@@ -109,7 +114,7 @@ async function loadAIDiagnosisPage() {
                 if (p.species) parts.push(p.species);
                 if (p.breed) parts.push(p.breed);
                 if (p.ageMonths != null) parts.push(p.ageMonths + '个月');
-                return `<option value="${p.id}">${parts.join(' · ')}</option>`;
+                return `<option value="${p.id}">${escHtml(parts.join(' · '))}</option>`;
             }).join('');
     }
 
@@ -132,7 +137,7 @@ async function loadHome() {
         const container = document.getElementById('hot-posts-list');
         if (container) container.innerHTML = hotPosts.map(p => `
             <div class="hot-post-item" onclick="goToPost('${p.id}')">
-                <span class="hot-title">${p.title}</span>
+                <span class="hot-title">${escHtml(p.title)}</span>
                 <span class="hot-meta">${p.replyCount || 0}回复</span>
             </div>
         `).join('');
@@ -145,7 +150,7 @@ async function loadHome() {
             container.innerHTML = dueReminders.map(r => `
                 <div class="reminder-item">
                     <span class="reminder-icon"><i data-lucide="bell"></i></span>
-                    <span>${r.title} — 还有 ${r.daysLeft} 天</span>
+                    <span>${escHtml(r.title)} — 还有 ${r.daysLeft} 天</span>
                 </div>
             `).join('');
         }
@@ -205,15 +210,13 @@ async function doLogin() {
     const username = document.getElementById('login-username').value;
     const password = document.getElementById('login-password').value;
     try {
-        const data = await apiPost('/api/users/login', { username, password });
-        // 新响应结构：{token, user}
-        AppState.token = data.token;
-        AppState.currentUser = data.user;
-        localStorage.setItem('pethealth_token', data.token);
+        // 登录成功后服务端通过 Set-Cookie 下发 HttpOnly Token，响应体直接是用户对象
+        const user = await apiPost('/api/users/login', { username, password });
+        AppState.currentUser = user;
         closeModal('login-modal');
         updateUserSection();
         refreshUnreadBadge();
-        showToast(`欢迎回来，${data.user.username}！`);
+        showToast(`欢迎回来，${user.username}！`);
     } catch (e) {
         showToast(e.message, 'error');
     }
@@ -243,14 +246,16 @@ function updateUserSection() {
     } else {
         const u = AppState.currentUser;
         const avatarUrl = u.avatar && u.avatar.startsWith('/') ? u.avatar : (u.avatar || '');
+        // 头像白名单：仅接受以 / 开头的站内路径，并做属性转义
+        const safeAvatar = typeof avatarUrl === 'string' && avatarUrl.startsWith('/') ? escHtml(avatarUrl) : '';
         section.innerHTML = `
             <div class="user-dropdown">
                 <div class="user-profile-entry" onclick="toggleUserDropdown(event)" title="个人中心">
-                    ${avatarUrl
-                        ? `<img class="user-avatar" src="${avatarUrl}" alt="头像" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex'">`
+                    ${safeAvatar
+                        ? `<img class="user-avatar" src="${safeAvatar}" alt="头像" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex'">`
                         : ''}
-                    <span class="user-avatar user-avatar-fallback" style="${avatarUrl ? 'display:none' : 'display:flex'}">${(u.username || 'U').charAt(0).toUpperCase()}</span>
-                    <span class="user-welcome">${u.username}</span>
+                    <span class="user-avatar user-avatar-fallback" style="${safeAvatar ? 'display:none' : 'display:flex'}">${escHtml((u.username || 'U').charAt(0).toUpperCase())}</span>
+                    <span class="user-welcome">${escHtml(u.username)}</span>
                     <span class="user-caret">▾</span>
                 </div>
                 <div class="user-dropdown-menu" id="user-dropdown-menu" style="display:none">
@@ -287,9 +292,7 @@ async function doLogout() {
     try {
         await apiPost('/api/users/logout', {});
     } catch (e) { /* ignore */ }
-    AppState.token = null;
     AppState.currentUser = null;
-    localStorage.removeItem('pethealth_token');
     updateUserSection();
     showToast('已退出登录');
 }
@@ -302,6 +305,8 @@ function showProfileModal() {
     if (!AppState.currentUser) return;
     const u = AppState.currentUser;
     const avatarUrl = u.avatar && u.avatar.startsWith('/') ? u.avatar : (u.avatar || '');
+    // 头像白名单：仅接受以 / 开头的站内路径，并做属性转义
+    const safeAvatar = typeof avatarUrl === 'string' && avatarUrl.startsWith('/') ? escHtml(avatarUrl) : '';
     const html = `
         <div class="modal" id="profile-modal">
             <div class="modal-content">
@@ -309,9 +314,9 @@ function showProfileModal() {
                 <h3><i data-lucide="user"></i> 个人中心</h3>
                 <div class="profile-avatar-row">
                     <div class="profile-avatar-wrap" id="profile-avatar-wrap">
-                        ${avatarUrl
-                            ? `<img id="profile-avatar-img" src="${avatarUrl}" alt="头像">`
-                            : `<div id="profile-avatar-img" class="profile-avatar-fallback">${(u.username || 'U').charAt(0).toUpperCase()}</div>`}
+                        ${safeAvatar
+                            ? `<img id="profile-avatar-img" src="${safeAvatar}" alt="头像">`
+                            : `<div id="profile-avatar-img" class="profile-avatar-fallback">${escHtml((u.username || 'U').charAt(0).toUpperCase())}</div>`}
                     </div>
                     <div class="profile-avatar-actions">
                         <button class="btn btn-primary btn-tiny" onclick="document.getElementById('avatar-file-input').click()"><i data-lucide="camera"></i> 上传头像</button>
@@ -321,16 +326,16 @@ function showProfileModal() {
                 </div>
                 <div class="form-group">
                     <label>用户名</label>
-                    <input type="text" value="${u.username}" disabled style="background:#f5f5f5">
+                    <input type="text" value="${escHtml(u.username)}" disabled style="background:#f5f5f5">
                 </div>
                 <div class="form-row">
                     <div class="form-group" style="flex:1">
                         <label>邮箱</label>
-                        <input id="profile-email" type="email" value="${u.email || ''}" placeholder="name@example.com">
+                        <input id="profile-email" type="email" value="${escHtml(u.email || '')}" placeholder="name@example.com">
                     </div>
                     <div class="form-group" style="flex:1">
                         <label>手机号</label>
-                        <input id="profile-phone" type="text" value="${u.phone || ''}" placeholder="选填">
+                        <input id="profile-phone" type="text" value="${escHtml(u.phone || '')}" placeholder="选填">
                     </div>
                 </div>
                 <div class="modal-actions">
@@ -371,8 +376,8 @@ function renderMyPosts(posts) {
         return `
         <div class="my-post-item">
             <div class="my-post-info">
-                <span class="post-category">${categoryIcon(p.category)}${p.category || 'GENERAL'}</span>
-                <span class="my-post-title">${p.title}</span>
+                <span class="post-category">${categoryIcon(p.category)}${escHtml(p.category || 'GENERAL')}</span>
+                <span class="my-post-title">${escHtml(p.title)}</span>
             </div>
             <div class="my-post-meta">
                 <span><i data-lucide="thumbs-up"></i> ${p.likeCount || 0}</span>
@@ -423,14 +428,14 @@ async function handleAvatarSelect(input) {
 
 /**
  * 上传头像到 /api/users/avatar（multipart/form-data）
- * 注意：不能走 api() 封装（其强制 Content-Type: application/json），需手动带 token 用 fetch
+ * 不能走 api() 封装（其强制 Content-Type: application/json），手动 fetch 并携带 Cookie
  */
 async function uploadAvatarFile(file) {
     const fd = new FormData();
     fd.append('file', file);
     const res = await fetch('/api/users/avatar', {
         method: 'POST',
-        headers: AppState.token ? { 'Authorization': 'Bearer ' + AppState.token } : {},
+        credentials: 'same-origin',
         body: fd
     });
     const json = await res.json();
@@ -461,21 +466,16 @@ async function saveProfile() {
     }
 }
 
-// 页面刷新时若有 Token，自动调 /me 恢复登录态
+// 页面加载时尝试恢复登录态：HttpOnly Cookie 自动携带，调 /me 判断是否已登录
 async function restoreLoginState() {
-    if (!AppState.token) {
-        updateUserSection();
-        return;
-    }
     try {
         const user = await apiGet('/api/users/me');
         AppState.currentUser = user;
         updateUserSection();
         refreshUnreadBadge();
     } catch (e) {
-        // Token 失效，清登录态
-        AppState.token = null;
-        localStorage.removeItem('pethealth_token');
+        // 未登录或 Cookie 失效
+        AppState.currentUser = null;
         updateUserSection();
     }
 }
@@ -506,11 +506,11 @@ async function loadPosts() {
             return `
             <div class="post-card card-glow">
                 <div class="post-header">
-                    <span class="post-category">${categoryIcon(p.category)}${p.category || 'GENERAL'}</span>
-                    <span class="post-author">by ${p.authorName}</span>
+                    <span class="post-category">${categoryIcon(p.category)}${escHtml(p.category || 'GENERAL')}</span>
+                    <span class="post-author">by ${escHtml(p.authorName)}</span>
                 </div>
-                <h3 class="post-title">${p.title}</h3>
-                <p class="post-content">${truncate(p.content, 100)}</p>
+                <h3 class="post-title">${escHtml(p.title)}</h3>
+                <p class="post-content">${escHtml(truncate(p.content, 100))}</p>
                 <div class="post-meta">
                     <span><i data-lucide="eye"></i> ${p.viewCount || 0}</span>
                     <button class="btn-tiny btn-like ${likeClass}" onclick="event.stopPropagation(); toggleLikePost('${p.id}', this, true)">
@@ -577,12 +577,12 @@ async function showPostDetailModal(post, replies) {
                 </div>` : '';
             return `
             <div class="reply-item ${r.isAccepted ? 'reply-item-accepted' : ''}">
-                <div class="reply-avatar">${(r.authorName || 'U').charAt(0).toUpperCase()}</div>
+                <div class="reply-avatar">${escHtml((r.authorName || 'U').charAt(0).toUpperCase())}</div>
                 <div class="reply-body">
                     <p class="reply-author">
-                        ${r.authorName || '匿名'} <span class="reply-time">${r.createdAt || ''}</span>
+                        ${escHtml(r.authorName || '匿名')} <span class="reply-time">${r.createdAt || ''}</span>
                     </p>
-                    <p class="reply-content">${r.content || ''}</p>
+                    <p class="reply-content">${escHtml(r.content || '')}</p>
                     ${actionsHtml}
                 </div>
             </div>`;
@@ -609,11 +609,11 @@ async function showPostDetailModal(post, replies) {
         <div class="modal post-detail-modal" id="post-detail-modal">
             <div class="modal-content modal-content-wide">
                 <button class="modal-close" onclick="closeModal('post-detail-modal')">✕</button>
-                <h3>${post.title}</h3>
-                <p class="post-author">作者: ${post.authorName || '-'}  ·  ${post.createdAt || ''}</p>
-                <p class="post-category">${categoryIcon(post.category)}${post.category || '未分类'} · ${post.petSpecies || ''}</p>
-                ${post.tags && post.tags.length ? `<p class="post-tags">${post.tags.map(t => `<span class="tag">${t}</span>`).join('')}</p>` : ''}
-                <div class="post-content-box">${post.content || ''}</div>
+                <h3>${escHtml(post.title)}</h3>
+                <p class="post-author">作者: ${escHtml(post.authorName || '-')}  ·  ${post.createdAt || ''}</p>
+                <p class="post-category">${categoryIcon(post.category)}${escHtml(post.category || '未分类')} · ${escHtml(post.petSpecies || '')}</p>
+                ${post.tags && post.tags.length ? `<p class="post-tags">${post.tags.map(t => `<span class="tag">${escHtml(t)}</span>`).join('')}</p>` : ''}
+                <div class="post-content-box">${escHtml(post.content || '')}</div>
                 <div class="post-stats">
                     <span><i data-lucide="eye"></i> <span id="detail-view-count">${post.viewCount || 0}</span></span>
                     <button id="detail-like-btn" class="btn-tiny btn-like ${likeBtnClass}" onclick="toggleLikePost('${post.id}', this, false)">
@@ -692,12 +692,12 @@ function renderRepliesHtml(post, replies) {
             </div>` : '';
         return `
         <div class="reply-item ${r.isAccepted ? 'reply-item-accepted' : ''}">
-            <div class="reply-avatar">${(r.authorName || 'U').charAt(0).toUpperCase()}</div>
+            <div class="reply-avatar">${escHtml((r.authorName || 'U').charAt(0).toUpperCase())}</div>
             <div class="reply-body">
                 <p class="reply-author">
-                    ${r.authorName || '匿名'} <span class="reply-time">${r.createdAt || ''}</span>
+                    ${escHtml(r.authorName || '匿名')} <span class="reply-time">${r.createdAt || ''}</span>
                 </p>
-                <p class="reply-content">${r.content || ''}</p>
+                <p class="reply-content">${escHtml(r.content || '')}</p>
                 ${actionsHtml}
             </div>
         </div>`;
@@ -786,8 +786,7 @@ async function showPostFormModal(postId) {
     const initSpecies  = isEdit ? (post.petSpecies || '') : '';
     const initTags     = (isEdit && Array.isArray(post.tags)) ? post.tags.join(',') : '';
 
-    // 属性转义（避免标题/标签含引号或 < > 破坏 HTML）
-    const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    // 属性转义统一走全局 esc / escHtml（定义见文件顶部）
 
     // 分类下拉（编辑态标记 selected；原生 <option> 不支持内嵌 HTML 图标，图标展示在卡片/详情的分类徽章处）
     const categoryOptions = [
@@ -987,9 +986,9 @@ async function loadPets() {
             <div class="pet-card card-glow card-shine">
                 <div class="pet-card-main" onclick="showPetDetail('${p.id}')">
                     <div class="pet-avatar">${petEmoji(p.species)}</div>
-                    <h3>${p.name}</h3>
-                    <p class="pet-meta">${p.species || ''} · ${p.breed || ''}</p>
-                    <p class="pet-meta">${p.gender || ''}${p.neutered == null ? '' : (p.neutered ? ' · 已绝育' : ' · 未绝育')}</p>
+                    <h3>${escHtml(p.name)}</h3>
+                    <p class="pet-meta">${escHtml(p.species || '')} · ${escHtml(p.breed || '')}</p>
+                    <p class="pet-meta">${escHtml(p.gender || '')}${p.neutered == null ? '' : (p.neutered ? ' · 已绝育' : ' · 未绝育')}</p>
                     ${p.vaccines && p.vaccines.length ?
                         `<span class="pet-badge"><i data-lucide="syringe"></i> ${p.vaccines.length} 疫苗</span>` : ''}
                 </div>
@@ -1042,7 +1041,7 @@ function showPetFormModal(petId) {
                 <div class="form-row">
                     <div class="form-group">
                         <label>宠物名 *</label>
-                        <input id="pf-name" type="text" value="${pet?.name || ''}" placeholder="如：豆豆" />
+                        <input id="pf-name" type="text" value="${escHtml(pet?.name || '')}" placeholder="如：豆豆" />
                     </div>
                     <div class="form-group">
                         <label>物种 *</label>
@@ -1058,7 +1057,7 @@ function showPetFormModal(petId) {
                 <div class="form-row">
                     <div class="form-group">
                         <label>品种</label>
-                        <input id="pf-breed" type="text" value="${pet?.breed || ''}" placeholder="如：柯基 / 英短" />
+                        <input id="pf-breed" type="text" value="${escHtml(pet?.breed || '')}" placeholder="如：柯基 / 英短" />
                     </div>
                     <div class="form-group">
                         <label>性别</label>
@@ -1084,12 +1083,12 @@ function showPetFormModal(petId) {
                     </div>
                     <div class="form-group">
                         <label>头像 URL（可选）</label>
-                        <input id="pf-avatar" type="text" value="${pet?.avatar || ''}" placeholder="留空使用默认 emoji" />
+                        <input id="pf-avatar" type="text" value="${escHtml(pet?.avatar || '')}" placeholder="留空使用默认 emoji" />
                     </div>
                 </div>
                 <div class="form-group">
                     <label>简介</label>
-                    <textarea id="pf-description" rows="2" placeholder="如：活泼好动的小短腿">${pet?.description || ''}</textarea>
+                    <textarea id="pf-description" rows="2" placeholder="如：活泼好动的小短腿">${escHtml(pet?.description || '')}</textarea>
                 </div>
                 <div class="modal-actions">
                     <button class="btn btn-secondary" onclick="closeModal('pet-form-modal')">取消</button>
@@ -1162,10 +1161,10 @@ function showPetDetail(petId) {
         <div class="pet-detail-header">
             <div class="pet-detail-avatar">${petEmoji(pet.species)}</div>
             <div class="pet-detail-info">
-                <h3>${pet.name}</h3>
-                <p class="pet-meta">${pet.species || '-'} · ${pet.breed || '-'} · ${pet.gender || '-'}</p>
+                <h3>${escHtml(pet.name)}</h3>
+                <p class="pet-meta">${escHtml(pet.species || '-')} · ${escHtml(pet.breed || '-')} · ${escHtml(pet.gender || '-')}</p>
                 <p class="pet-meta">生日: ${pet.birthday || '-'} (${ageText})</p>
-                ${pet.description ? `<p class="pet-desc">${pet.description}</p>` : ''}
+                ${pet.description ? `<p class="pet-desc">${escHtml(pet.description)}</p>` : ''}
             </div>
             <div class="pet-detail-actions">
                 <button class="btn-tiny btn-secondary" title="编辑基本信息" onclick="closeModal('pet-detail-modal'); showPetFormModal('${pet.id}')"><i data-lucide="pen-square"></i> 编辑</button>
@@ -1187,11 +1186,11 @@ function showPetDetail(petId) {
                 <div class="timeline-item ${dueClass}">
                     <div class="timeline-dot"><i data-lucide="syringe"></i></div>
                     <div class="timeline-content">
-                        <h4>${v.name || '未命名疫苗'}</h4>
+                        <h4>${escHtml(v.name || '未命名疫苗')}</h4>
                         <p class="timeline-date">接种: ${v.vaccinatedAt || '-'}</p>
                         ${v.nextDueAt ? `<p class="timeline-due">下次: ${v.nextDueAt}</p>` : ''}
-                        ${v.vetClinic ? `<p class="timeline-meta">医院: ${v.vetClinic}</p>` : ''}
-                        ${v.notes ? `<p class="timeline-meta">备注: ${v.notes}</p>` : ''}
+                        ${v.vetClinic ? `<p class="timeline-meta">医院: ${escHtml(v.vetClinic)}</p>` : ''}
+                        ${v.notes ? `<p class="timeline-meta">备注: ${escHtml(v.notes)}</p>` : ''}
                         <div class="timeline-actions">
                             <button class="btn-tiny btn-secondary" onclick="showRecordFormModal('${pet.id}','vaccine',${i})"><i data-lucide="pen-square"></i></button>
                             <button class="btn-tiny btn-danger" onclick="deleteRecord('${pet.id}','vaccine',${i})"><i data-lucide="trash-2"></i></button>
@@ -1215,10 +1214,10 @@ function showPetDetail(petId) {
                 <div class="timeline-item ${dueClass}">
                     <div class="timeline-dot"><i data-lucide="worm"></i></div>
                     <div class="timeline-content">
-                        <h4>${d.type || '驱虫'} · ${d.medicine || '-'}</h4>
+                        <h4>${escHtml(d.type || '驱虫')} · ${escHtml(d.medicine || '-')}</h4>
                         <p class="timeline-date">驱虫: ${d.dewormedAt || '-'}</p>
                         ${d.nextDueAt ? `<p class="timeline-due">下次: ${d.nextDueAt}</p>` : ''}
-                        ${d.notes ? `<p class="timeline-meta">备注: ${d.notes}</p>` : ''}
+                        ${d.notes ? `<p class="timeline-meta">备注: ${escHtml(d.notes)}</p>` : ''}
                         <div class="timeline-actions">
                             <button class="btn-tiny btn-secondary" onclick="showRecordFormModal('${pet.id}','deworming',${i})"><i data-lucide="pen-square"></i></button>
                             <button class="btn-tiny btn-danger" onclick="deleteRecord('${pet.id}','deworming',${i})"><i data-lucide="trash-2"></i></button>
@@ -1240,11 +1239,11 @@ function showPetDetail(petId) {
                 <div class="timeline-item">
                     <div class="timeline-dot"><i data-lucide="heart-pulse"></i></div>
                     <div class="timeline-content">
-                        <h4>${c.clinic || '体检'}</h4>
+                        <h4>${escHtml(c.clinic || '体检')}</h4>
                         <p class="timeline-date">日期: ${c.checkedAt || '-'}</p>
-                        ${c.vetName ? `<p class="timeline-meta">兽医: ${c.vetName}</p>` : ''}
-                        ${c.result ? `<p class="timeline-meta">结果: ${c.result}</p>` : ''}
-                        ${c.abnormalItems && c.abnormalItems.length ? `<p class="timeline-meta"><i data-lucide="alert-triangle"></i> 异常: ${c.abnormalItems.join(', ')}</p>` : ''}
+                        ${c.vetName ? `<p class="timeline-meta">兽医: ${escHtml(c.vetName)}</p>` : ''}
+                        ${c.result ? `<p class="timeline-meta">结果: ${escHtml(c.result)}</p>` : ''}
+                        ${c.abnormalItems && c.abnormalItems.length ? `<p class="timeline-meta"><i data-lucide="alert-triangle"></i> 异常: ${escHtml(c.abnormalItems.join(', '))}</p>` : ''}
                         <div class="timeline-actions">
                             <button class="btn-tiny btn-secondary" onclick="showRecordFormModal('${pet.id}','checkup',${i})"><i data-lucide="pen-square"></i></button>
                             <button class="btn-tiny btn-danger" onclick="deleteRecord('${pet.id}','checkup',${i})"><i data-lucide="trash-2"></i></button>
@@ -1265,10 +1264,10 @@ function showPetDetail(petId) {
                 <div class="timeline-item">
                     <div class="timeline-dot"><i data-lucide="hospital"></i></div>
                     <div class="timeline-content">
-                        <h4>${v.reason || '就诊'}</h4>
+                        <h4>${escHtml(v.reason || '就诊')}</h4>
                         <p class="timeline-date">日期: ${v.visitedAt || '-'}</p>
-                        ${v.diagnosis ? `<p class="timeline-meta">诊断: ${v.diagnosis}</p>` : ''}
-                        ${v.treatment ? `<p class="timeline-meta">治疗: ${v.treatment}</p>` : ''}
+                        ${v.diagnosis ? `<p class="timeline-meta">诊断: ${escHtml(v.diagnosis)}</p>` : ''}
+                        ${v.treatment ? `<p class="timeline-meta">治疗: ${escHtml(v.treatment)}</p>` : ''}
                         <div class="timeline-actions">
                             <button class="btn-tiny btn-secondary" onclick="showRecordFormModal('${pet.id}','medicalVisit',${i})"><i data-lucide="pen-square"></i></button>
                             <button class="btn-tiny btn-danger" onclick="deleteRecord('${pet.id}','medicalVisit',${i})"><i data-lucide="trash-2"></i></button>
@@ -1330,13 +1329,13 @@ function showRecordFormModal(petId, recordType, recordIdx) {
     let fieldsHtml = '';
     if (recordType === 'vaccine') {
         fieldsHtml = `
-            <div class="form-group"><label>疫苗名称 *</label><input id="rf-name" type="text" value="${rec.name || ''}" placeholder="如：猫三联" /></div>
+            <div class="form-group"><label>疫苗名称 *</label><input id="rf-name" type="text" value="${escHtml(rec.name || '')}" placeholder="如：猫三联" /></div>
             <div class="form-row">
-                <div class="form-group"><label>接种日期</label><input id="rf-vaccinatedAt" type="date" value="${rec.vaccinatedAt || ''}" /></div>
-                <div class="form-group"><label>下次到期</label><input id="rf-nextDueAt" type="date" value="${rec.nextDueAt || ''}" /></div>
+                <div class="form-group"><label>接种日期</label><input id="rf-vaccinatedAt" type="date" value="${escHtml(rec.vaccinatedAt || '')}" /></div>
+                <div class="form-group"><label>下次到期</label><input id="rf-nextDueAt" type="date" value="${escHtml(rec.nextDueAt || '')}" /></div>
             </div>
-            <div class="form-group"><label>接种医院</label><input id="rf-vetClinic" type="text" value="${rec.vetClinic || ''}" /></div>
-            <div class="form-group"><label>备注</label><input id="rf-notes" type="text" value="${rec.notes || ''}" /></div>`;
+            <div class="form-group"><label>接种医院</label><input id="rf-vetClinic" type="text" value="${escHtml(rec.vetClinic || '')}" /></div>
+            <div class="form-group"><label>备注</label><input id="rf-notes" type="text" value="${escHtml(rec.notes || '')}" /></div>`;
     } else if (recordType === 'deworming') {
         fieldsHtml = `
             <div class="form-row">
@@ -1347,28 +1346,28 @@ function showRecordFormModal(petId, recordType, recordIdx) {
                         <option value="体内外驱虫" ${rec.type === '体内外驱虫' ? 'selected' : ''}>体内外驱虫</option>
                     </select>
                 </div>
-                <div class="form-group"><label>药品名</label><input id="rf-medicine" type="text" value="${rec.medicine || ''}" placeholder="如：拜宠清" /></div>
+                <div class="form-group"><label>药品名</label><input id="rf-medicine" type="text" value="${escHtml(rec.medicine || '')}" placeholder="如：拜宠清" /></div>
             </div>
             <div class="form-row">
-                <div class="form-group"><label>驱虫日期</label><input id="rf-dewormedAt" type="date" value="${rec.dewormedAt || ''}" /></div>
-                <div class="form-group"><label>下次到期</label><input id="rf-nextDueAt" type="date" value="${rec.nextDueAt || ''}" /></div>
+                <div class="form-group"><label>驱虫日期</label><input id="rf-dewormedAt" type="date" value="${escHtml(rec.dewormedAt || '')}" /></div>
+                <div class="form-group"><label>下次到期</label><input id="rf-nextDueAt" type="date" value="${escHtml(rec.nextDueAt || '')}" /></div>
             </div>
-            <div class="form-group"><label>备注</label><input id="rf-notes" type="text" value="${rec.notes || ''}" /></div>`;
+            <div class="form-group"><label>备注</label><input id="rf-notes" type="text" value="${escHtml(rec.notes || '')}" /></div>`;
     } else if (recordType === 'checkup') {
         fieldsHtml = `
             <div class="form-row">
-                <div class="form-group"><label>体检日期</label><input id="rf-checkedAt" type="date" value="${rec.checkedAt || ''}" /></div>
-                <div class="form-group"><label>医院</label><input id="rf-clinic" type="text" value="${rec.clinic || ''}" /></div>
+                <div class="form-group"><label>体检日期</label><input id="rf-checkedAt" type="date" value="${escHtml(rec.checkedAt || '')}" /></div>
+                <div class="form-group"><label>医院</label><input id="rf-clinic" type="text" value="${escHtml(rec.clinic || '')}" /></div>
             </div>
-            <div class="form-group"><label>兽医姓名</label><input id="rf-vetName" type="text" value="${rec.vetName || ''}" /></div>
-            <div class="form-group"><label>检查结果</label><textarea id="rf-result" rows="2" placeholder="如：一切正常，体重 5.8kg">${rec.result || ''}</textarea></div>
-            <div class="form-group"><label>异常项（逗号分隔）</label><input id="rf-abnormalItems" type="text" value="${(rec.abnormalItems || []).join(', ')}" placeholder="如：牙齿结石, 皮肤红点" /></div>`;
+            <div class="form-group"><label>兽医姓名</label><input id="rf-vetName" type="text" value="${escHtml(rec.vetName || '')}" /></div>
+            <div class="form-group"><label>检查结果</label><textarea id="rf-result" rows="2" placeholder="如：一切正常，体重 5.8kg">${escHtml(rec.result || '')}</textarea></div>
+            <div class="form-group"><label>异常项（逗号分隔）</label><input id="rf-abnormalItems" type="text" value="${escHtml((rec.abnormalItems || []).join(', '))}" placeholder="如：牙齿结石, 皮肤红点" /></div>`;
     } else if (recordType === 'medicalVisit') {
         fieldsHtml = `
-            <div class="form-group"><label>就诊日期</label><input id="rf-visitedAt" type="date" value="${rec.visitedAt || ''}" /></div>
-            <div class="form-group"><label>就诊原因 *</label><input id="rf-reason" type="text" value="${rec.reason || ''}" placeholder="如：食欲下降" /></div>
-            <div class="form-group"><label>诊断结果</label><textarea id="rf-diagnosis" rows="2">${rec.diagnosis || ''}</textarea></div>
-            <div class="form-group"><label>治疗方案</label><textarea id="rf-treatment" rows="2">${rec.treatment || ''}</textarea></div>`;
+            <div class="form-group"><label>就诊日期</label><input id="rf-visitedAt" type="date" value="${escHtml(rec.visitedAt || '')}" /></div>
+            <div class="form-group"><label>就诊原因 *</label><input id="rf-reason" type="text" value="${escHtml(rec.reason || '')}" placeholder="如：食欲下降" /></div>
+            <div class="form-group"><label>诊断结果</label><textarea id="rf-diagnosis" rows="2">${escHtml(rec.diagnosis || '')}</textarea></div>
+            <div class="form-group"><label>治疗方案</label><textarea id="rf-treatment" rows="2">${escHtml(rec.treatment || '')}</textarea></div>`;
     }
 
     const html = `
@@ -1376,7 +1375,7 @@ function showRecordFormModal(petId, recordType, recordIdx) {
             <div class="modal-content">
                 <button class="modal-close" onclick="closeModal('record-form-modal')">✕</button>
                 <h3><i data-lucide="${meta.icon}"></i> ${isEdit ? '编辑' : '添加'}${meta.title}记录</h3>
-                <p class="pet-meta">宠物：${pet.name}</p>
+                <p class="pet-meta">宠物：${escHtml(pet.name)}</p>
                 <input type="hidden" id="rf-petId" value="${petId}" />
                 <input type="hidden" id="rf-type-key" value="${recordType}" />
                 <input type="hidden" id="rf-idx" value="${isEdit ? recordIdx : -1}" />
@@ -1551,7 +1550,7 @@ async function showHealthRecordFormModal(recordId = null) {
     // 默认选中：编辑用记录的宠物，否则用健康记录页当前选中的宠物
     const currentPetId = record?.petId || document.getElementById('hr-pet-select')?.value || pets[0].id;
     const petOptions = pets.map(p =>
-        `<option value="${p.id}" ${p.id === currentPetId ? 'selected' : ''}>${p.name} · ${p.species || ''} · ${p.breed || ''}</option>`).join('');
+        `<option value="${p.id}" ${p.id === currentPetId ? 'selected' : ''}>${escHtml(p.name)} · ${escHtml(p.species || '')} · ${escHtml(p.breed || '')}</option>`).join('');
 
     // 默认记录时间 = 编辑用记录时间，否则现在（datetime-local 格式）
     const pad = n => String(n).padStart(2, '0');
@@ -1586,7 +1585,7 @@ async function showHealthRecordFormModal(recordId = null) {
                     </div>
                     <div class="form-group" style="flex:1">
                         <label>单位</label>
-                        <input id="hrf-unit" type="text" value="${editUnit}" maxlength="10">
+                        <input id="hrf-unit" type="text" value="${escHtml(editUnit)}" maxlength="10">
                     </div>
                 </div>
                 <div class="form-row">
@@ -1597,7 +1596,7 @@ async function showHealthRecordFormModal(recordId = null) {
                 </div>
                 <div class="form-group">
                     <label>备注</label>
-                    <textarea id="hrf-notes" rows="2" maxlength="200" placeholder="可选，例如：饭后两小时测量（最多200字）">${record?.notes || ''}</textarea>
+                    <textarea id="hrf-notes" rows="2" maxlength="200" placeholder="可选，例如：饭后两小时测量（最多200字）">${escHtml(record?.notes || '')}</textarea>
                 </div>
                 <div class="modal-actions">
                     <button class="btn" onclick="closeModal('hr-form-modal')">取消</button>
@@ -1684,7 +1683,7 @@ async function loadHealthRecords() {
         sel.innerHTML = pets.length === 0
             ? `<option value="">（请先在宠物档案页添加宠物）</option>`
             : `<option value="">请选择宠物</option>` + pets.map(p =>
-                `<option value="${p.id}">${p.name} · ${p.species || ''} · ${p.breed || ''}</option>`).join('');
+                `<option value="${p.id}">${escHtml(p.name)} · ${escHtml(p.species || '')} · ${escHtml(p.breed || '')}</option>`).join('');
 
         // 默认选第一只宠物
         if (pets.length > 0 && !sel.value) sel.value = pets[0].id;
@@ -1774,9 +1773,9 @@ function renderHealthRecordCard(r) {
         <div class="hr-record-card card-glow" onclick="showHealthRecordDetail('${r.id}')">
             <div class="hr-record-icon">${hrIcon(type)}</div>
             <div class="hr-record-body">
-                <h4>${type} <span class="hr-record-value">${value}${unit}</span></h4>
+                <h4>${escHtml(type)} <span class="hr-record-value">${escHtml(value)}${escHtml(unit)}</span></h4>
                 <p class="hr-record-time">${time}</p>
-                ${r.notes ? `<p class="hr-record-notes">${r.notes}</p>` : ''}
+                ${r.notes ? `<p class="hr-record-notes">${escHtml(r.notes)}</p>` : ''}
             </div>
             <div class="hr-record-actions">
                 <button class="btn btn-tiny btn-secondary" onclick="event.stopPropagation(); showHealthRecordFormModal('${r.id}')">编辑</button>
@@ -1939,10 +1938,10 @@ async function showHealthRecordDetail(recordId) {
         <div class="modal" id="hr-detail-modal">
             <div class="modal-content">
                 <button class="modal-close" onclick="closeModal('hr-detail-modal')">✕</button>
-                <h3>${type}</h3>
+                <h3>${escHtml(type)}</h3>
                 <p class="pet-meta">记录时间：${time}</p>
-                <p class="pet-meta">数值：<b>${value}${unit}</b></p>
-                ${r.notes ? `<p class="pet-desc">${r.notes}</p>` : ''}
+                <p class="pet-meta">数值：<b>${escHtml(value)}${escHtml(unit)}</b></p>
+                ${r.notes ? `<p class="pet-desc">${escHtml(r.notes)}</p>` : ''}
                 <div class="modal-actions">
                     <button class="btn btn-secondary" onclick="closeModal('hr-detail-modal')">关闭</button>
                 </div>
@@ -1957,11 +1956,7 @@ function renderSampleTrendChart(dom) {
 }
 
 // ===================== AI 诊断 =====================
-// 文本安全转义工具（LLM 自由文本渲染用）
-function escHtml(s) {
-    return String(s == null ? '' : s).replace(/[&<>"']/g,
-        c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
+// escHtml / esc 已上移至文件顶部作为全局唯一定义，nl2br 继续调用全局 escHtml
 function nl2br(s) {
     return escHtml(s).replace(/\n/g, '<br>');
 }
@@ -2034,7 +2029,7 @@ async function showHealthReportModal() {
         || document.getElementById('hr-pet-select')?.value
         || pets[0].id;
     const petOptions = pets.map(p =>
-        `<option value="${p.id}" ${p.id === currentPetId ? 'selected' : ''}>${p.name} · ${p.species || ''} · ${p.breed || ''}</option>`).join('');
+        `<option value="${p.id}" ${p.id === currentPetId ? 'selected' : ''}>${escHtml(p.name)} · ${escHtml(p.species || '')} · ${escHtml(p.breed || '')}</option>`).join('');
 
     const html = `
         <div class="modal" id="health-report-modal">
@@ -2121,7 +2116,7 @@ async function loadNutrition() {
     } else {
         sel.innerHTML = '<option value="">请选择宠物</option>' + pets.map(p => {
             const parts = [p.name, p.species, p.breed].filter(Boolean);
-            return `<option value="${p.id}">${parts.join(' · ')}</option>`;
+            return `<option value="${p.id}">${escHtml(parts.join(' · '))}</option>`;
         }).join('');
     }
     await loadNutritionReport();
@@ -2165,17 +2160,17 @@ function renderNutritionReport(c, report) {
         : '年龄未知';
 
     const weightHtml = w
-        ? `<p class="nutrition-meta">最新体重 <b>${w.value} ${w.unit || 'kg'}</b>` +
+        ? `<p class="nutrition-meta">最新体重 <b>${escHtml(w.value)} ${escHtml(w.unit || 'kg')}</b>` +
           (w.recordedAt ? `（${new Date(w.recordedAt).toLocaleDateString('zh-CN')}）` : '') + `</p>`
         : '';
 
     if (!calc) {
         c.innerHTML = `
         <div class="card-glow">
-            <h3>${pet.name || '宠物'}</h3>
-            <p class="nutrition-meta">${pet.species || ''}${pet.breed ? ' · ' + pet.breed : ''} · ${ageText} · ${neuteredText}</p>
+            <h3>${escHtml(pet.name || '宠物')}</h3>
+            <p class="nutrition-meta">${escHtml(pet.species || '')}${pet.breed ? ' · ' + escHtml(pet.breed) : ''} · ${ageText} · ${neuteredText}</p>
             ${weightHtml}
-            <p class="empty-hint" style="margin-top:0.75rem">${report.notice || '暂无法生成营养计算'}</p>
+            <p class="empty-hint" style="margin-top:0.75rem">${escHtml(report.notice || '暂无法生成营养计算')}</p>
         </div>`;
         return;
     }
@@ -2189,8 +2184,8 @@ function renderNutritionReport(c, report) {
     c.innerHTML = `
         <div class="card-glow nutrition-report">
             <div class="nutrition-head">
-                <h3>${pet.name || '宠物'} · 每日营养需求</h3>
-                <p class="nutrition-meta">${pet.species || ''}${pet.breed ? ' · ' + pet.breed : ''} · ${ageText} · ${neuteredText}</p>
+                <h3>${escHtml(pet.name || '宠物')} · 每日营养需求</h3>
+                <p class="nutrition-meta">${escHtml(pet.species || '')}${pet.breed ? ' · ' + escHtml(pet.breed) : ''} · ${ageText} · ${neuteredText}</p>
                 ${weightHtml}
             </div>
             <div class="nutrition-stats">
@@ -2200,7 +2195,7 @@ function renderNutritionReport(c, report) {
                 </div>
                 <div class="nutrition-stat">
                     <span>阶段系数</span>
-                    <b>${calc.merFactor}<small>${calc.stageLabel}</small></b>
+                    <b>${calc.merFactor}<small>${escHtml(calc.stageLabel)}</small></b>
                 </div>
                 <div class="nutrition-stat">
                     <span>每日能量 MER</span>
@@ -2232,7 +2227,7 @@ function renderNutritionReport(c, report) {
                     : ''}
             </div>
             <div id="nt-trend-chart" class="nutrition-chart"></div>
-            ${report.notice ? `<p class="nutrition-tip">${report.notice}</p>` : ''}
+            ${report.notice ? `<p class="nutrition-tip">${escHtml(report.notice)}</p>` : ''}
             <p class="nutrition-disclaimer">参考 NRC 2006 / WSAVA 通用估算标准，实际需求因个体代谢与活动量而异，请以兽医建议为准。</p>
         </div>`;
 
@@ -2354,11 +2349,11 @@ function renderReminderItem(r) {
     return `
         <div class="reminder-item" data-rid="${r.id}">
             <div class="reminder-item-main">
-                <b>${r.title || r.type}</b>
-                ${r.description ? `<span class="vet-meta" style="margin-left:0.5rem">${truncate(r.description, 40)}</span>` : ''}
+                <b>${escHtml(r.title || r.type)}</b>
+                ${r.description ? `<span class="vet-meta" style="margin-left:0.5rem">${escHtml(truncate(r.description, 40))}</span>` : ''}
             </div>
             <div class="reminder-item-meta">
-                <span class="vet-meta">${r.petName || '通用'}</span>
+                <span class="vet-meta">${escHtml(r.petName || '通用')}</span>
                 <span class="vet-meta">${time}</span>
                 ${statusBadge}
                 ${actionButtons}
@@ -2466,7 +2461,7 @@ async function showReminderFormModal(reminderId = null) {
                 if (p.species) parts.push(p.species);
                 if (p.breed) parts.push(p.breed);
                 const selected = editing && editing.petId === p.id ? 'selected' : '';
-                return `<option value="${p.id}" data-pet-name="${p.name}" ${selected}>${parts.join(' · ')}</option>`;
+                return `<option value="${p.id}" data-pet-name="${escHtml(p.name)}" ${selected}>${escHtml(parts.join(' · '))}</option>`;
             }).join('');
     }
 
@@ -2504,7 +2499,7 @@ async function showReminderFormModal(reminderId = null) {
                     </div>
                     <div class="form-group" style="flex:2">
                         <label>提醒标题 <span style="color:var(--danger)">*</span></label>
-                        <input id="rf-title" type="text" maxlength="100" value="${editing ? (editing.title || '') : ''}" placeholder="例如：下周六带豆豆打狂犬疫苗">
+                        <input id="rf-title" type="text" maxlength="100" value="${escHtml(editing ? (editing.title || '') : '')}" placeholder="例如：下周六带豆豆打狂犬疫苗">
                     </div>
                 </div>
                 <div class="form-row">
@@ -2523,7 +2518,7 @@ async function showReminderFormModal(reminderId = null) {
                 </div>
                 <div class="form-group">
                     <label>补充说明</label>
-                    <textarea id="rf-desc" rows="3" maxlength="500" placeholder="可选，例如：宠物医院地址、注意事项等（最多500字）">${editing ? (editing.description || '') : ''}</textarea>
+                    <textarea id="rf-desc" rows="3" maxlength="500" placeholder="可选，例如：宠物医院地址、注意事项等（最多500字）">${escHtml(editing ? (editing.description || '') : '')}</textarea>
                 </div>
                 <div class="modal-actions">
                     <button class="btn" onclick="closeModal('reminder-form-modal')">取消</button>
@@ -2644,8 +2639,8 @@ async function loadNotifications() {
                 <div class="notif-item ${n.isRead ? 'notif-read' : 'notif-unread'}" ${n.isRead ? '' : `onclick="markNotificationRead('${n.id}')"`}>
                     <span class="notif-icon"><i data-lucide="${typeIcon}"></i></span>
                     <div class="notif-body">
-                        <p class="notif-title">${n.title || ''}${n.isRead ? '' : '<span class="notif-dot">●</span>'}</p>
-                        <p class="notif-content">${n.content || ''}</p>
+                        <p class="notif-title">${escHtml(n.title || '')}${n.isRead ? '' : '<span class="notif-dot">●</span>'}</p>
+                        <p class="notif-content">${escHtml(n.content || '')}</p>
                         <p class="notif-time">${time}</p>
                     </div>
                     <button class="notif-delete" title="删除" onclick="event.stopPropagation(); deleteNotification('${n.id}')"><i data-lucide="x"></i></button>

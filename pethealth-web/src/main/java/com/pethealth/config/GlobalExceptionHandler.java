@@ -1,6 +1,9 @@
 package com.pethealth.config;
 
 import com.pethealth.dto.ApiResponse;
+import com.pethealth.exception.AccessDeniedException;
+import com.pethealth.exception.ServiceUnavailableException;
+import com.pethealth.exception.UnauthorizedException;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -55,11 +58,35 @@ public class GlobalExceptionHandler {
         return ApiResponse.error(404, e.getMessage());
     }
 
+    @ExceptionHandler(UnauthorizedException.class)
+    @ResponseStatus(HttpStatus.UNAUTHORIZED)
+    public ApiResponse<Void> handleUnauthorized(UnauthorizedException e) {
+        return ApiResponse.error(401, e.getMessage());
+    }
+
+    @ExceptionHandler(AccessDeniedException.class)
+    @ResponseStatus(HttpStatus.FORBIDDEN)
+    public ApiResponse<Void> handleAccessDenied(AccessDeniedException e) {
+        log.warn("越权访问被拒绝: {}", e.getMessage());
+        return ApiResponse.error(403, e.getMessage());
+    }
+
+    /**
+     * 依赖的基础设施不可用（如 Redis 写会话失败）→ 503，让前端明确感知"暂时不可用"而非静默失败
+     */
+    @ExceptionHandler(ServiceUnavailableException.class)
+    @ResponseStatus(HttpStatus.SERVICE_UNAVAILABLE)
+    public ApiResponse<Void> handleServiceUnavailable(ServiceUnavailableException e) {
+        log.warn("依赖服务不可用: {}", e.getMessage());
+        return ApiResponse.error(503, e.getMessage());
+    }
+
     @ExceptionHandler(Exception.class)
     @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
     public ApiResponse<Void> handleGeneric(Exception e) {
         log.error("未处理异常", e);
-        return ApiResponse.error(500, "Internal error: " + e.getMessage());
+        // 不向前端透出内部异常信息（可能含主机/端口/查询语句等敏感细节）
+        return ApiResponse.error(500, "服务繁忙，请稍后再试");
     }
 
     public static class ResourceNotFoundException extends RuntimeException {

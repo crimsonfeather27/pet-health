@@ -13,9 +13,15 @@
 
     <artifactId>reminder-service</artifactId>
     <name>PetHealth · Reminder Service</name>
-    <description>提醒调度 + RabbitMQ 延迟消息 + 邮件推送 · 端口 8084 · Dubbo 20884</description>
+    <description>提醒 Dubbo 服务 · 端口 8084 · Dubbo 20884</description>
 
     <dependencies>
+        <!-- 共享契约：Dubbo 接口 + Reminder 实体 -->
+        <dependency>
+            <groupId>com.pethealth</groupId>
+            <artifactId>pethealth-api</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
@@ -23,10 +29,6 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-mongodb</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-amqp</artifactId>
         </dependency>
         <dependency>
             <groupId>org.apache.dubbo</groupId>

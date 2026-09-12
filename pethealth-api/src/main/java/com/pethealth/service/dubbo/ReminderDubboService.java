@@ -5,9 +5,9 @@ import com.pethealth.entity.Reminder;
 import java.util.List;
 
 /**
- * 提醒服务 Dubbo 接口（Consumer 侧）
+ * 提醒服务 Dubbo 接口（共享契约）
  * <p>
- * 由 reminder-service 提供。设计文档 7.5 节。
+ * 由 reminder-service 提供实现，pethealth-web 通过 Dubbo 调用。设计文档 7.5 节。
  */
 public interface ReminderDubboService {
 

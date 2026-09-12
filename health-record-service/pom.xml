@@ -16,6 +16,12 @@
     <description>健康记录 + AI 诊断微服务 · 端口 8086 · Dubbo 20885</description>
 
     <dependencies>
+        <!-- 共享契约：Dubbo 接口 + HealthRecord 实体 -->
+        <dependency>
+            <groupId>com.pethealth</groupId>
+            <artifactId>pethealth-api</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
@@ -31,10 +37,6 @@
         <dependency>
             <groupId>org.apache.commons</groupId>
             <artifactId>commons-pool2</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-amqp</artifactId>
         </dependency>
         <dependency>
             <groupId>org.apache.dubbo</groupId>

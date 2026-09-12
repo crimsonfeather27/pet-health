@@ -14,7 +14,7 @@
 - [5. 核心实体与 DTO 定义](#5-核心实体与-dto-定义)
 - [6. REST API 接口文档](#6-rest-api-接口文档)
 - [7. Dubbo 微服务接口设计](#7-dubbo-微服务接口设计)
-- [8. RabbitMQ 消息队列设计](#8-rabbitmq-消息队列设计)
+- [8. ~~RabbitMQ 消息队列设计~~（已下线）](#8-rabbitmq-消息队列设计已下线)
 - [9. AI 功能设计](#9-ai-功能设计)
 - [10. 前端页面设计](#10-前端页面设计)
 - [11. 配置文件模板](#11-配置文件模板)
@@ -41,7 +41,7 @@
 |------|------|----------|
 | 宠物档案 | 多宠物管理、基本信息、疫苗记录、驱虫记录 | MongoDB 嵌套文档 + 动态字段扩展 |
 | 健康记录 | 体重 / 体温 / 饮食 / 运动量追踪 + 趋势图表 | Redis 缓存周 / 月聚合数据，ECharts 前端可视化 |
-| 提醒系统 | 疫苗到期、驱虫提醒、体检提醒 | RabbitMQ 延迟队列 + 应用内提醒 |
+| 提醒系统 | 疫苗到期、驱虫提醒、体检提醒 | 定时调度 `findAndModify` 原子抢占 + 应用内提醒 |
 | AI 健康助手 | 症状描述 → AI 初步诊断建议 + 就医指引 | DeepSeek AI + Prompt 工程 + 安全兜底 |
 | 宠物社区 | 养宠经验分享、问答互动 | 嵌套评论 + 点赞 + Redis 热门榜 (Sorted Set) |
 | 营养助手 | 按 NRC/WSAVA 公式计算每日能量与喂食量，支持 BCS 体重管理 | 档案 + 健康记录数据聚合 + 规则表引擎 + ECharts 体重趋势 |
@@ -77,10 +77,10 @@
 | 微服务 | Apache Dubbo | 3.2.4 | RPC 通信 |
 | 注册中心 | Nacos（可选） | 2.3.0 | 生产可用；本地演示采用 Dubbo 直连（registry: N/A，见 2.4） |
 | Spring Cloud | Spring Cloud | 2023.0.0 | 微服务基础 |
-| 数据库 | MongoDB | 6.x | 主存储（文档型，灵活 Schema） |
-| 缓存 | Redis | 7.x | 排行榜、会话、统计缓存 |
-| 消息队列 | RabbitMQ | 3.12.x | 提醒系统、异步通知 |
-| 分布式追踪 | Zipkin + Micrometer + Brave | - | 全链路追踪 |
+| 数据库 | MongoDB | 8.2.0 | 主存储（文档型，灵活 Schema） |
+| 缓存 | Redis | 7.x | 排行榜、会话 Token、统计缓存 |
+| ~~消息队列~~ | ~~RabbitMQ~~ | — | **已下线**：提醒改为定时调度 + 应用内触达，无 MQ 依赖 |
+| ~~分布式追踪~~ | ~~Zipkin + Micrometer~~ | — | **未启用**：本项目未接入链路追踪 |
 | AI 调用 | OkHttp + DeepSeek API | 4.12.0 | AI 健康诊断 |
 | JSON | FastJSON2 | 2.0.41 | JSON 处理 |
 | Lombok | Lombok | - | 简化 POJO |
@@ -138,14 +138,16 @@
 │  service │  │ record-     │  │ service     │
 │  :8081   │  │ service     │  │ :8084       │
 │ Dubbo P  │  │ :8086       │  │ Dubbo P +   │
-│ MongoDB  │  │ Dubbo P     │  │ RabbitMQ    │
-│ 宠物档案 │  │ Redis 缓存  │  │ 延迟消息    │
+│ MongoDB  │  │ Dubbo P     │  │ 定时调度     │
+│ 宠物档案 │  │ Redis 缓存  │  │ 原子抢占     │
 └────┬─────┘  │ LLM 调用    │  └──────┬──────┘
      │        └─────┬───────┘         │
      ▼              ▼                 ▼
-  MongoDB       Redis 缓存        RabbitMQ
-  主存储         健康聚合         延迟提醒消息
+  MongoDB       Redis 缓存        MongoDB
+  主存储         会话/统计聚合      提醒集合（共享 pethealth_web 库）
 ```
+
+> **说明**：提醒系统**不再使用 RabbitMQ 延迟队列**，改为 `ReminderScheduler` 定时扫描 + `findAndModify` 原子抢占（PENDING→SENT），到期后状态流转并在提醒中心页面展示（应用内触达）。
 
 ### 2.2 微服务模块与端口规划
 
@@ -154,7 +156,7 @@
 | `pethealth-web` | 主入口 / 前端静态资源 / 社区 + 用户 API | 8080 | — | 单体 Web，启动最方便 |
 | `pet-service` | 宠物档案 / 疫苗 / 驱虫记录 | 8081 | 20881 | Dubbo Provider |
 | `health-record-service` | 健康记录 / 趋势统计 / AI 诊断 | 8086 | 20885 | Dubbo Provider + LLM |
-| `reminder-service` | 提醒调度 / 延迟消息 / 应用内提醒 | 8084 | 20884 | Dubbo Provider + RabbitMQ |
+| `reminder-service` | 提醒调度 / 应用内提醒 | 8084 | 20884 | Dubbo Provider + 定时调度（无 MQ） |
 
 ### 2.3 服务间调用关系
 
@@ -169,9 +171,11 @@ health-record-service (8086)
  └── HTTP ──► DeepSeek API (AI 诊断)
 
 reminder-service (8084)
- ├── RabbitMQ (发送延迟消息) ──► 自身消费 ──► 提醒状态流转（应用内触达）
+ ├── 定时扫描 remindAt 到期且 status=PENDING 的提醒 → findAndModify 原子翻转为 SENT（应用内触达）
  └── Dubbo ──► pet-service (查询疫苗到期日)
 ```
+
+> RabbitMQ 延迟队列 / 邮件推送**已下线**，提醒统一走应用内状态流转。
 
 ### 2.4 Dubbo 直连（无注册中心）
 
@@ -211,8 +215,8 @@ pethealth/                                          ← 项目根目录
 │       │   │   ├── UserController.java
 │       │   │   ├── PostController.java
 │       │   │   ├── ReplyController.java
-│       │   │   ├── CommentController.java
 │       │   │   ├── LikeController.java
+│       │   │   ├── NotificationController.java      ← 站内通知
 │       │   │   ├── PetController.java              ← 转发到 pet-service
 │       │   │   ├── HealthRecordController.java     ← 转发到 health-record-service
 │       │   │   ├── ReminderController.java          ← 提醒（本地 + reminder-service）
@@ -220,48 +224,65 @@ pethealth/                                          ← 项目根目录
 │       │   │   ├── AIDiagnosisController.java       ← 转发到 health-record-service
 │       │   │   └── StatisticsController.java
 │       │   ├── dto/
-│       │   │   ├── ApiResponse.java
-│       │   │   ├── UserDTO.java
-│       │   │   ├── PostDTO.java / PostDetailDTO.java
-│       │   │   ├── ReplyDTO.java
-│       │   │   ├── CommentDTO.java
-│       │   │   ├── LikeDTO.java
-│       │   │   ├── PetDTO.java
-│       │   │   ├── HealthRecordDTO.java
-│       │   │   ├── ReminderDTO.java
 │       │   │   └── NutritionReport.java
 │       │   ├── entity/
 │       │   │   ├── User.java
 │       │   │   ├── Post.java
 │       │   │   ├── Reply.java
-│       │   │   ├── Comment.java
-│       │   │   └── Like.java
+│       │   │   ├── Like.java
+│       │   │   └── Notification.java
+│       │   ├── exception/
+│       │   │   ├── AccessDeniedException.java
+│       │   │   ├── ServiceUnavailableException.java
+│       │   │   └── UnauthorizedException.java
+│       │   ├── interceptor/
+│       │   │   ├── AuthInterceptor.java             ← Token 解析 + 写接口登录门槛
+│       │   │   └── AuthContext.java
 │       │   ├── repository/
 │       │   │   ├── UserRepository.java
 │       │   │   ├── PostRepository.java
 │       │   │   ├── ReplyRepository.java
-│       │   │   ├── CommentRepository.java
-│       │   │   └── LikeRepository.java
+│       │   │   ├── LikeRepository.java
+│       │   │   ├── NotificationRepository.java
+│       │   │   ├── PetProfileRepository.java
+│       │   │   ├── HealthRecordRepository.java
+│       │   │   └── ReminderRepository.java
 │       │   ├── service/
 │       │   │   ├── UserService.java
+│       │   │   ├── AuthService.java                 ← Redis Token 会话（写失败抛 503）
 │       │   │   ├── PostService.java
 │       │   │   ├── ReplyService.java
-│       │   │   ├── CommentService.java
-│       │   │   ├── LikeService.java
-│       │   │   ├── PostRankService.java             ← Redis Sorted Set 热门榜
-│       │   │   ├── RecentPostCacheService.java
-│       │   │   └── dubbo/                           ← Dubbo Consumer 接口
-│       │   │       ├── PetDubboService.java
-│       │   │       ├── HealthRecordDubboService.java
-│       │   │       ├── AIDiagnosisDubboService.java
-│       │   │       └── ReminderDubboService.java
-│       │   └── dto/
+│       │   │   ├── LikeService.java                 ← $inc 原子计数 + DuplicateKey 幂等
+│       │   │   ├── PostRankService.java             ← Redis Sorted Set 热门榜（Redis 挂降级 DB）
+│       │   │   ├── HealthRecordStatsService.java    ← 周/月聚合（键带周期起点，SCAN 失效）
+│       │   │   ├── NotificationService.java
+│       │   │   ├── NutritionCalculator.java
+│       │   │   ├── NutritionService.java
+│       │   │   ├── ReminderScheduler.java           ← findAndModify 原子抢占
+│       │   │   ├── ReminderService.java
+│       │   │   ├── OwnershipGuard.java
+│       │   │   └── RateLimitService.java
+│       │   └── PetHealthWebApplication.java
 │       └── resources/
 │           ├── application.yml
 │           └── static/
 │               ├── index.html
 │               ├── script.js
 │               └── styles.css
+│
+├── pethealth-api/                                      ← 共享 API 模块（Dubbo 接口 + 公共实体）
+│   ├── pom.xml
+│   └── src/main/java/com/pethealth/
+│       ├── dto/ApiResponse.java
+│       ├── entity/
+│       │   ├── PetProfile.java
+│       │   ├── HealthRecord.java
+│       │   └── Reminder.java
+│       └── service/dubbo/                             ← Dubbo 接口（Consumer/Provider 共享同一份）
+│           ├── PetDubboService.java
+│           ├── HealthRecordDubboService.java
+│           ├── AIDiagnosisDubboService.java
+│           └── ReminderDubboService.java
 │
 ├── pet-service/                                    ← 宠物档案微服务（端口 8081）
 │   ├── pom.xml
@@ -291,31 +312,23 @@ pethealth/                                          ← 项目根目录
 │       │   ├── HealthRecordServiceApplication.java
 │       │   ├── config/
 │       │   │   ├── RedisConfig.java
-│       │   │   ├── RabbitMQConfig.java
 │       │   │   ├── CorsConfig.java
 │       │   │   └── GlobalExceptionHandler.java
 │       │   ├── entity/
-│       │   │   └── HealthRecord.java
+│       │   │   └── HealthRecord.java                 ← 实际在 pethealth-api，此处共享
 │       │   ├── repository/
 │       │   │   └── HealthRecordRepository.java
-│       │   ├── dto/
-│       │   │   ├── HealthRecordDTO.java
-│       │   │   ├── HealthTrendDTO.java
-│       │   │   ├── AIDiagnosisDTO.java
-│       │   │   └── HealthReportDTO.java
 │       │   ├── service/
 │       │   │   ├── HealthRecordService.java
+│       │   │   ├── HealthRecordStatsService.java    ← 周/月聚合缓存（键带周期起点）
 │       │   │   ├── LLMClient.java                    ← AI 诊断核心
 │       │   │   ├── AIDiagnosisService.java
-│       │   │   ├── MessageProducerService.java       ← 异步消息
-│       │   │   ├── MessageConsumerService.java
 │       │   │   └── HealthRecordDubboServiceImpl.java
 │       │   └── controller/
 │       │       ├── HealthRecordController.java
 │       │       └── AIDiagnosisController.java
 │       └── resources/
-│           ├── application.yml
-│           └── bootstrap.yml
+│           └── application.yml
 │
 └── reminder-service/                               ← 提醒服务（端口 8084）
     ├── pom.xml
@@ -323,20 +336,14 @@ pethealth/                                          ← 项目根目录
         ├── java/com/pethealth/
         │   ├── ReminderServiceApplication.java
         │   ├── config/
-        │   │   ├── RabbitMQConfig.java
         │   │   └── ReminderConfig.java
         │   ├── entity/
-        │   │   └── Reminder.java
+        │   │   └── Reminder.java                    ← 实际在 pethealth-api，此处共享
         │   ├── repository/
         │   │   └── ReminderRepository.java
-        │   ├── dto/
-        │   │   ├── ReminderDTO.java
-        │   │   └── ReminderCreateDTO.java
         │   ├── service/
         │   │   ├── ReminderService.java
-        │   │   ├── ReminderScheduler.java          ← 定时扫描
-        │   │   ├── DelayMessageProducer.java        ← 发送延迟消息
-        │   │   ├── DelayMessageConsumer.java        ← 消费触发提醒
+        │   │   ├── ReminderScheduler.java          ← findAndModify 原子抢占（无 MQ）
         │   │   └── ReminderDubboServiceImpl.java
         │   └── controller/
         │       └── ReminderController.java
@@ -517,7 +524,7 @@ pethealth/                                          ← 项目根目录
   "viewCount": 128,
   "likeCount": 12,
   "replyCount": 8,
-  "status": "ACTIVE",                  // ACTIVE / CLOSED / DELETED
+  "status": "published",              // published（已发布）；删除为物理删除
   "createdAt": "2026-05-27T09:30:00Z",
   "updatedAt": "2026-05-27T09:30:00Z"
 }
@@ -526,7 +533,7 @@ pethealth/                                          ← 项目根目录
 **索引：**
 - `{ authorId: 1 }`
 - `{ category: 1, createdAt: -1 }`
-- `{ status: 1 }`
+- `{ status: 1 }`（值为 `published`）
 - `{ tags: 1 }`（多键索引）
 
 ### 4.6 replies — 帖子回复（扁平结构，简单版本）
@@ -620,12 +627,14 @@ pethealth/                                          ← 项目根目录
 
 | Key | 类型 | 用途 | TTL |
 |-----|------|------|-----|
+| `pethealth:auth:token:{token}` | Hash | 登录会话（userId/username/loginAt），写失败抛 503 | 7 天 |
 | `pethealth:post:rank` | Sorted Set | 社区热门帖子榜，score = like×3 + reply×5 + view×1 | 永久，实时更新 |
-| `pethealth:post:rank:cache` | String (JSON) | 热门榜查询结果缓存 | 1 分钟 |
-| `pethealth:pet:{petId}:weekly-stats` | Hash | 某宠物本周健康数据聚合（avgWeight / minTemp / ...） | 到周末自动过期 |
-| `pethealth:pet:{petId}:monthly-stats` | Hash | 某月聚合 | 到月末自动过期 |
-| `pethealth:owner:{ownerId}:session` | String | 用户登录 Session | 7 天 |
-| `pethealth:pet:{petId}:recent-records` | List | 最近 20 条健康记录（滑动窗口） | 永久 |
+| `pethealth:post:rank:cache` | String (JSON) | 热门榜查询结果缓存（Redis 不可用时降级查 DB） | 1 分钟 |
+| `pethealth:statistics:home` | String (JSON) | 首页聚合统计缓存 | 短 TTL |
+| `pethealth:pet:{petId}:weekly-stats:{本周一日期}` | Hash | 某宠物本周健康数据聚合（键带周期起点防串期） | 7 天 |
+| `pethealth:pet:{petId}:monthly-stats:{yyyy-MM}` | Hash | 某月聚合（键带月份起点） | 30 天 |
+
+> **周期起点防串期**：周/月统计键末尾带周期起点（本周一日期 / `yyyy-MM`），跨周/跨月后自然读写新键，旧周期靠 TTL 自然过期。失效时按 `petId` 前缀 SCAN 渐进式删除该宠物所有周期的键，宠物换绑时旧/新 petId 双失效。
 
 **热门榜分数算法（算法设计简单直接，兼顾性能与可维护性）：**
 ```
@@ -788,9 +797,11 @@ public class HealthRecord {
 }
 ```
 
-### 5.3 Post / Reply / Comment / Like 实体
+### 5.3 Post / Reply / Like 实体
 
-以下四个实体结构简洁，与社区常见设计保持一致。collection 名分别为 `posts` / `replies` / `comments` / `likes`。
+以下三个实体结构简洁，与社区常见设计保持一致。collection 名分别为 `posts` / `replies` / `likes`。
+
+> **嵌套评论（Comment）当前未实现**：项目暂未提供 Comment 实体、Controller 与 Repository，回复为扁平结构（`Reply`），不含对回复的二级评论。
 
 ```java
 // Post（对应原 Question）
@@ -825,7 +836,7 @@ public class Reply {
     private LocalDateTime createdAt;
 }
 
-// Comment / Like — 结构简洁实用，完整代码见第 5.5 节辅助服务里的 Repository 声明
+// Like — userId + targetType + targetId 唯一索引防重复点赞（DuplicateKey 幂等）
 ```
 
 ### 5.4 通用 ApiResponse
@@ -883,6 +894,8 @@ public class ApiResponse<T> {
 ### 5.5.1 SecurityConfig（Spring Security — BCrypt + 放开所有接口）
 
 **文件位置**: `pethealth-web/src/main/java/com/pethealth/config/SecurityConfig.java`
+
+> **实际认证机制**：Spring Security 仅提供 `BCryptPasswordEncoder` 并放开所有接口（`permitAll`），**真正的登录态校验由 `AuthInterceptor` 完成**——解析 HttpOnly Cookie / `Authorization: Bearer` 中的 Token，查 Redis 取 userId，写接口（POST/PUT/DELETE）无有效 Token 返回 401。Token 写 Redis 失败时抛 `ServiceUnavailableException` → 503。
 
 ```java
 package com.pethealth.config;
@@ -990,6 +1003,8 @@ public class RedisConfig {
 
 **文件位置**: `pethealth-web/src/main/java/com/pethealth/config/GlobalExceptionHandler.java`
 
+> **实际实现的异常映射**（比下文代码更全）：`MethodArgumentNotValidException`→400、`ConstraintViolationException`→400、`IllegalArgumentException`→400、`ResourceNotFoundException`→404、`UnauthorizedException`→401、`AccessDeniedException`→403、`ServiceUnavailableException`→503（Redis 写 Token 失败等）、兜底 `Exception`→500（不透出内部信息）。
+
 ```java
 package com.pethealth.config;
 
@@ -1049,6 +1064,8 @@ public class GlobalExceptionHandler {
 ### 5.5.4 DataInitializer（启动时自动插入 Demo 数据）
 
 **文件位置**: `pethealth-web/src/main/java/com/pethealth/config/DataInitializer.java`
+
+> **实际初始化内容**（dev 环境生效）：`admin/admin123` + `demo/123456` 两个用户，以及 2 只宠物（猫/狗）、若干社区帖子与回复、点赞、健康记录、提醒，便于直接登录查看全量功能。下文代码为简化版（仅 demo + 帖子）。
 
 ```java
 package com.pethealth.config;
@@ -1174,6 +1191,8 @@ public class DataInitializer implements CommandLineRunner {
 ### 5.5.5 PostRankService（Redis Sorted Set 热门榜 — 完整实现）
 
 **文件位置**: `pethealth-web/src/main/java/com/pethealth/service/PostRankService.java`
+
+> **实际实现增加 Redis 不可用时的降级**：`getTopPosts` / `updateScore` / `syncFromDatabase` 全部包裹 try/catch，Redis 异常时读路径回源数据库（取最近发布的候选帖按热度分数内存排序），写路径静默跳过，待全量同步任务重建排行榜。下文代码为基础版（不含降级）。
 
 ```java
 package com.pethealth.service;
@@ -1435,76 +1454,78 @@ public class EmailNotifyService {
 }
 ```
 
-### 5.5.7 ReminderScheduler（定时扫描到期提醒）
+### 5.5.7 ReminderScheduler（定时扫描 + 原子抢占到期提醒）
 
-**文件位置**: `reminder-service/src/main/java/com/pethealth/service/ReminderScheduler.java`
+**文件位置**: `pethealth-web/src/main/java/com/pethealth/service/ReminderScheduler.java`
 
 ```java
 package com.pethealth.service;
 
 import com.pethealth.entity.Reminder;
-import com.pethealth.repository.ReminderRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.mongodb.core.FindAndModifyOptions;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
-import java.util.List;
 
 /**
- * 提醒定时调度器
- * 每分钟扫描一次，找出 remindAt <= 当前时间 && status=PENDING 的提醒
- * 扫描到后调用 EmailNotifyService 发送邮件
- *
- * 为什么需要这个？
- * - RabbitMQ 延迟消息适合"精确时间点触发"（比如疫苗到期前 7 天凌晨 3 点）
- * - ReminderScheduler 作为兜底：万一 RabbitMQ 消费失败或遗漏，定时器会补发
+ * 提醒到期调度器
+ * 每分钟扫描 remindAt <= now && status=PENDING 的提醒，到期即标记 SENT。
+ * <p>
+ * 发送语义（原子抢占）：用 findAndModify 把 status 从 PENDING 原子翻转为 SENT，
+ * 抢占条件里带 status=PENDING —— 多实例并发扫描时同一条提醒只会被抢占一次，
+ * 不存在"先查出来再改状态"的竞态窗口，天然防止重复发送。
+ * 每抢占一条都重新回查 DB（循环 findAndModify），直到无到期提醒为止。
+ * <p>
+ * 个人项目采用站内提醒：到期流转状态后，提醒中心页面即展示"已发送"。
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class ReminderScheduler {
 
-    private final ReminderRepository reminderRepository;
-    private final EmailNotifyService emailNotifyService;
+    private final MongoTemplate mongoTemplate;
 
-    @Value("${reminder.scheduler-interval-seconds:60}")
-    private int intervalSeconds;
-
-    /**
-     * 每分钟扫描一次到期提醒
-     * fixedDelayString 使用配置文件的变量值
-     */
     @Scheduled(fixedDelayString = "${reminder.scheduler-interval-seconds:60}000")
     public void scanAndSend() {
         LocalDateTime now = LocalDateTime.now();
-        List<Reminder> dueList = reminderRepository.findPendingBefore(now);
+        int sent = 0;
+        while (true) {
+            // 原子抢占一条到期提醒（仅 status 仍为 PENDING 的会命中）
+            Query query = new Query(Criteria.where("status").is("PENDING")
+                    .and("remindAt").lte(now));
+            Update update = new Update()
+                    .set("status", "SENT")
+                    .set("updatedAt", LocalDateTime.now());
+            Reminder claimed = mongoTemplate.findAndModify(
+                    query, update, FindAndModifyOptions.options().returnNew(false), Reminder.class);
 
-        if (dueList.isEmpty()) {
-            log.debug("无到期提醒");
-            return;
+            if (claimed == null) break;
+            sent++;
+            log.info("到期提醒已发送: id={}, title={}, pet={}",
+                    claimed.getId(), claimed.getTitle(), claimed.getPetName());
         }
 
-        log.info("扫描到 {} 条到期提醒", dueList.size());
-
-        for (Reminder reminder : dueList) {
-            try {
-                emailNotifyService.send(reminder);
-                reminder.setStatus("SENT");
-                reminderRepository.save(reminder);
-            } catch (Exception e) {
-                log.error("发送提醒失败，id={}", reminder.getId(), e);
-            }
+        if (sent == 0) {
+            log.debug("无到期提醒");
+        } else {
+            log.info("本轮共发送 {} 条到期提醒", sent);
         }
     }
 }
 ```
 
-> 记得 `reminder-service` 的主启动类也要加 `@EnableScheduling`！
+> 已移除 `EmailNotifyService` 与 RabbitMQ 延迟消息：提醒统一走应用内状态流转（PENDING → SENT → ACKNOWLEDGED / CANCELLED）。记得 `pethealth-web` 主启动类加 `@EnableScheduling`。
 
-### 5.5.8 DelayMessageProducer / DelayMessageConsumer（延迟消息发送与消费）
+### 5.5.8 DelayMessageProducer / DelayMessageConsumer（已移除）
+
+> **RabbitMQ 延迟消息方案已下线**：项目不再依赖 `spring-boot-starter-amqp`，提醒改为 `ReminderScheduler` 定时扫描 + `findAndModify` 原子抢占。以下代码仅作历史参考，**当前代码库中不存在这两个类**，也无需在 pom.xml 引入 AMQP 依赖。
 
 **文件位置**: `reminder-service/src/main/java/com/pethealth/service/DelayMessageProducer.java`
 
@@ -1629,10 +1650,15 @@ public class DelayMessageConsumer {
 
 | Method | Path | 说明 |
 |--------|------|------|
-| POST | `/api/users/register` | 用户注册（BCrypt 加密） |
-| POST | `/api/users/login` | 用户登录，返回 sessionId |
+| POST | `/api/users/register` | 用户注册（BCrypt 加密，用户名/邮箱唯一） |
+| POST | `/api/users/login` | 用户登录，通过 `Set-Cookie` 下发 HttpOnly Token（响应体仅返回用户信息） |
+| POST | `/api/users/logout` | 登出（删除 Redis Token + 清除 Cookie） |
+| GET  | `/api/users/me` | 当前登录用户（基于 Token） |
 | GET  | `/api/users/{id}` | 查询用户信息 |
-| PUT  | `/api/users/{id}` | 更新用户资料 |
+| PUT  | `/api/users/{id}` | 更新用户资料（仅本人） |
+| POST | `/api/users/avatar` | 上传头像（multipart/form-data，字段 `file`） |
+
+> **认证机制**：Token 存 Redis（`pethealth:auth:token:{token}` Hash，TTL 7 天），通过 HttpOnly Cookie `PETHEALTH_TOKEN` 下发；写接口（POST/PUT/DELETE）必须携带有效 Token，否则 401；Redis 写 Token 失败返回 503。
 
 **注册请求体：**
 ```json
@@ -1646,13 +1672,10 @@ public class DelayMessageConsumer {
 | POST | `/api/pets` | 创建宠物档案 |
 | GET  | `/api/pets` | 查询当前用户所有宠物 |
 | GET  | `/api/pets/{id}` | 查询单只宠物详情 |
-| PUT  | `/api/pets/{id}` | 更新宠物基本信息 |
-| DELETE | `/api/pets/{id}` | 删除宠物（软删除） |
-| POST | `/api/pets/{id}/vaccines` | 新增疫苗记录 |
-| POST | `/api/pets/{id}/dewormings` | 新增驱虫记录 |
-| POST | `/api/pets/{id}/checkups` | 新增体检记录 |
-| POST | `/api/pets/{id}/medical-visits` | 新增就医记录 |
-| GET  | `/api/pets/due-vaccines` | 我名下即将到期的疫苗（用于首页提醒） |
+| PUT  | `/api/pets/{id}` | 更新宠物基本信息（含嵌套的疫苗/驱虫/体检/就医数组） |
+| DELETE | `/api/pets/{id}` | 删除宠物（物理删除，并清理其统计缓存） |
+
+> 疫苗 / 驱虫 / 体检 / 就医记录作为 `PetProfile` 的嵌套数组，通过 `PUT /api/pets/{id}` 整体更新，无独立子路由。
 
 **创建宠物请求体：**
 ```json
@@ -1672,10 +1695,12 @@ public class DelayMessageConsumer {
 | Method | Path | 说明 |
 |--------|------|------|
 | POST | `/api/health-records` | 新增健康记录 |
-| GET  | `/api/health-records/pet/{petId}` | 查询某宠物的所有记录（分页） |
-| GET  | `/api/health-records/pet/{petId}/trend` | 趋势图数据（按类型 + 时间范围） |
-| GET  | `/api/health-records/pet/{petId}/stats` | 周/月聚合统计（Redis 缓存） |
-| POST | `/api/health-records/pet/{petId}/symptom` | 提交症状 → AI 诊断（见 9.2） |
+| GET  | `/api/health-records/pet/{petId}` | 查询某宠物的所有记录 |
+| GET  | `/api/health-records` | 按 ownerId 查询（可选） |
+| GET  | `/api/health-records/{id}` | 查询单条记录 |
+| GET  | `/api/health-records/pet/{petId}/trends?period=weekly\|monthly` | 周/月聚合统计（Redis 缓存，键带周期起点） |
+| PUT  | `/api/health-records/{id}` | 更新记录（换宠物时旧/新 petId 缓存双失效） |
+| DELETE | `/api/health-records/{id}` | 删除记录 |
 
 **新增健康记录请求体：**
 ```json
@@ -1691,8 +1716,8 @@ public class DelayMessageConsumer {
 
 | Method | Path | 说明 |
 |--------|------|------|
-| POST | `/api/ai-diagnosis` | 症状描述 → AI 初步诊断 |
-| POST | `/api/ai-diagnosis/pet/{petId}/health-report` | AI 生成健康周报/月报 |
+| POST | `/api/ai-diagnosis` | 症状描述 → AI 初步诊断（Dubbo 调 health-record-service） |
+| GET  | `/api/ai-diagnosis/report?ownerId=&petId=&period=WEEKLY\|MONTHLY` | AI 生成健康周报/月报 |
 
 **AI 诊断请求体：**
 ```json
@@ -1729,13 +1754,12 @@ public class DelayMessageConsumer {
 | Method | Path | 说明 |
 |--------|------|------|
 | POST | `/api/posts` | 发帖 |
-| GET  | `/api/posts` | 帖子列表（支持 category / tags / page 筛选） |
-| GET  | `/api/posts/{id}` | 帖子详情（含回复 + 评论 + 作者信息） |
+| GET  | `/api/posts` | 帖子列表（支持 category / page / size 筛选） |
+| GET  | `/api/posts/{id}` | 帖子详情（含回复 + 作者信息） |
 | PUT  | `/api/posts/{id}` | 编辑帖子 |
-| DELETE | `/api/posts/{id}` | 删除帖子 |
-| GET  | `/api/posts/hot` | 热门帖子 Top N（Redis 热门榜） |
+| DELETE | `/api/posts/{id}` | 删除帖子（物理删除） |
+| GET  | `/api/posts/hot?limit=` | 热门帖子 Top N（Redis 热门榜，Redis 挂时降级 DB） |
 | GET  | `/api/posts/author/{authorId}` | 某用户的帖子 |
-| GET  | `/api/posts/species/{species}` | 按宠物类型筛选 |
 
 ### 6.6 回复
 
@@ -1746,13 +1770,9 @@ public class DelayMessageConsumer {
 | DELETE | `/api/replies/{id}` | 删除回复 |
 | POST | `/api/replies/{id}/accept` | 标记为最佳答案 |
 
-### 6.7 评论（嵌套）
+### 6.7 评论（嵌套）— 未实现
 
-| Method | Path | 说明 |
-|--------|------|------|
-| POST | `/api/comments` | 发表评论（对 post / reply） |
-| GET  | `/api/comments/{targetType}/{targetId}` | 查询目标下所有评论（树形） |
-| DELETE | `/api/comments/{id}` | 删除评论 |
+> 当前项目**未实现嵌套评论功能**，无 `CommentController` / `Comment` 实体。回复为扁平结构（`Reply`）。
 
 ### 6.8 点赞
 
@@ -1767,13 +1787,14 @@ public class DelayMessageConsumer {
 | Method | Path | 说明 |
 |--------|------|------|
 | GET  | `/api/reminders?ownerId=` | 我的所有提醒（前端按进行中 / 已完成分组） |
+| GET  | `/api/reminders/due?days=7` | 即将到期（未来 N 天内）的提醒 |
 | POST | `/api/reminders` | 创建提醒（应用内触达，notifyMethod 固定 `INAPP`） |
 | PUT  | `/api/reminders/{id}` | 编辑提醒（仅 PENDING 可编辑） |
 | PUT  | `/api/reminders/{id}/acknowledge` | 确认完成提醒（状态 → ACKNOWLEDGED） |
 | PUT  | `/api/reminders/{id}/cancel` | 取消提醒 |
 | DELETE | `/api/reminders/{id}` | 删除提醒 |
 
-> 提醒一律在**应用内**触达（提醒中心状态流转），项目内无邮件 / 短信通道。
+> 提醒一律在**应用内**触达（提醒中心状态流转），项目内无邮件 / 短信通道，无 RabbitMQ。到期由 `ReminderScheduler` 用 `findAndModify` 原子抢占翻转 PENDING→SENT。
 
 ### 6.10 营养助手
 
@@ -1791,35 +1812,44 @@ public class DelayMessageConsumer {
 | GET | `/api/statistics/home` | 首页统计：帖子数、活跃用户、宠物数、即将到期提醒数 |
 | GET | `/api/statistics/dashboard` | 用户 Dashboard：宠物数、健康记录总数、本周打卡、AI 诊断次数 |
 
+### 6.12 站内通知
+
+| Method | Path | 说明 |
+|--------|------|------|
+| GET  | `/api/notifications` | 我的通知列表 |
+| GET  | `/api/notifications/unread-count` | 未读通知数 |
+| PUT  | `/api/notifications/{id}/read` | 标记单条已读 |
+| PUT  | `/api/notifications/read-all` | 全部标记已读 |
+| DELETE | `/api/notifications/{id}` | 删除通知 |
+
 ---
 
 ## 7. Dubbo 微服务接口设计
 
 > Dubbo 接口定义在 Consumer 侧（pethealth-web），Provider 侧实现。Provider 接口包名统一为 `com.pethealth.service.dubbo`。
 
-### 7.0 Dubbo 接口的"双边声明"模式（重要！）
+### 7.0 Dubbo 接口的"共享模块"模式（重要！）
 
-这个模式验证过有效：**同一个接口文件需要在 Provider 和 Consumer 两边各放一份**，但写法略有不同：
+Dubbo 接口统一放在**共享模块 `pethealth-api`** 中，Consumer（pethealth-web）和各 Provider 都依赖该模块，**无需两边各复制一份接口**：
 
 ```
-pethealth-web (Consumer 侧)
-  └── src/main/java/com/pethealth/service/dubbo/
-      ├── PetDubboService.java          ← 纯 Java interface，无注解
-      ├── HealthRecordDubboService.java ← 纯 Java interface，无注解
-      ├── AIDiagnosisDubboService.java  ← 纯 Java interface，无注解
-      └── ReminderDubboService.java     ← 纯 Java interface，无注解
+pethealth-api/                                  ← 共享 API 模块
+  └── src/main/java/com/pethealth/
+      ├── dto/ApiResponse.java
+      ├── entity/
+      │   ├── PetProfile.java / HealthRecord.java / Reminder.java
+      └── service/dubbo/                         ← 纯 Java interface，无注解
+          ├── PetDubboService.java
+          ├── HealthRecordDubboService.java
+          ├── AIDiagnosisDubboService.java
+          └── ReminderDubboService.java
 
-pet-service (Provider 侧)
-  └── src/main/java/com/pethealth/service/dubbo/
-      ├── PetDubboService.java          ← 纯 Java interface（同名同包同签名）
-      └── PetDubboServiceImpl.java      ← 实现类，标注 @DubboService
+pet-service (Provider)
+  └── .../service/dubbo/PetDubboServiceImpl.java ← @DubboService 实现
+
+pethealth-web (Consumer)
+  └── Controller 中用 @DubboReference(url="dubbo://localhost:20881/...") 注入
 ```
-
-**关键区别：**
-- Consumer 侧（pethealth-web）：接口是**纯 interface**，**没有任何 Dubbo 注解**。使用时用 `@Reference` 注入。
-- Provider 侧（各微服务）：**同一个接口文件也放一份**（签名完全一致），然后写一个 `XxxDubboServiceImpl` 实现类，上面标注 `@DubboService`。
-
-**为什么要这样？** Dubbo 的 RPC 需要**契约共享**。Provider 和 Consumer 必须使用完全相同的接口定义才能通信。最简单的做法就是两边各放一份同名同包的纯 Java interface，签名完全一致。
 
 **Consumer 侧使用示例（pethealth-web 的 PetController）：**
 ```java
@@ -1939,9 +1969,11 @@ public interface ReminderDubboService {
 
 ---
 
-## 8. RabbitMQ 消息队列设计
+## 8. ~~RabbitMQ 消息队列设计~~（已下线）
 
-### 8.1 交换机 / 队列规划
+> **本项目已移除 RabbitMQ 依赖**：`pom.xml` 不再引入 `spring-boot-starter-amqp`，提醒系统改为 `ReminderScheduler` 定时扫描 + `findAndModify` 原子抢占（详见 5.5.7 节）。以下交换机/队列规划与代码仅作历史方案参考，**当前代码库中不存在 `RabbitMQConfig` / `DelayMessageProducer` / `DelayMessageConsumer`**。
+
+### 8.1 交换机 / 队列规划（历史方案）
 
 | 交换机类型 | Exchange | Queue | Routing Key | 用途 |
 |------------|----------|-------|-------------|------|
@@ -3475,7 +3507,7 @@ logging:
     com.pethealth: DEBUG
 ```
 
-### 11.3 health-record-service 的 application.yml（端口 8086 + RabbitMQ + LLM）
+### 11.3 health-record-service 的 application.yml（端口 8086 + LLM）
 
 ```yaml
 server:
@@ -3494,15 +3526,6 @@ spring:
       host: localhost
       port: 6379
       database: 2
-  rabbitmq:
-    host: localhost
-    port: 5672
-    username: guest
-    password: guest
-    virtual-host: /
-  zipkin:
-    base-url: http://localhost:9411
-    sender.type: web
 
 dubbo:
   application:
@@ -3522,7 +3545,7 @@ dubbo:
 llm:
   api-url: ${LLM_API_URL:https://api.deepseek.com/v1/chat/completions}
   api-key: ${LLM_API_KEY:your-api-key-here}
-  model: ${LLM_MODEL:deepseek-v4-pro}
+  model: ${LLM_MODEL:deepseek-v4-flash}
   max-tokens: 4096
   temperature: 0.7
 
@@ -3532,7 +3555,9 @@ logging:
     com.pethealth: DEBUG
 ```
 
-### 11.4 reminder-service 的 application.yml（端口 8084 + RabbitMQ）
+> 已移除 `rabbitmq` 与 `zipkin` 配置（项目未使用 MQ 与链路追踪）。
+
+### 11.4 reminder-service 的 application.yml（端口 8084）
 
 ```yaml
 server:
@@ -3547,11 +3572,6 @@ spring:
       port: 27017
       # 统一使用 pethealth_web 库（与 pethealth-web 共享 reminders 集合）
       database: pethealth_web
-  rabbitmq:
-    host: localhost
-    port: 5672
-    username: guest
-    password: guest
 
 dubbo:
   application:
@@ -3566,14 +3586,6 @@ dubbo:
   qos:
     enable: false
 
-# 邮件推送配置（SMTP）
-mail:
-  smtp-host: ${SMTP_HOST:smtp.example.com}
-  smtp-port: ${SMTP_PORT:465}
-  smtp-user: ${SMTP_USER:}
-  smtp-password: ${SMTP_PASSWORD:}
-  from: ${MAIL_FROM:pethealth@example.com}
-
 # 定时扫描频率（秒）
 reminder:
   scheduler-interval-seconds: 60
@@ -3583,7 +3595,21 @@ logging:
   level:
     org.springframework.data.mongodb: DEBUG
     com.pethealth: DEBUG
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    tags:
+      application: ${spring.application.name}
 ```
+
+> 已移除 `rabbitmq` 与 `mail.*` 配置：提醒为应用内触达（无邮件/SMS），无 MQ 依赖。
 
 ### 11.5 营养助手配置说明
 
@@ -3692,9 +3718,7 @@ export LLM_MODEL=deepseek-v4-flash
 # Redis 已安装在 F:\Redis\ 并加入 PATH，直接运行
 redis-server
 
-# ====== 3. 启动 RabbitMQ（端口 5672，管理界面 http://localhost:15672）======
-# 仅 reminder-service 的延迟消息链路需要，未启用 RABBITMQ 时自动降级为定时扫描
-net start RabbitMQ
+# ====== 3. 无需 RabbitMQ（提醒已改为定时调度 + 应用内触达，无 MQ 依赖）======
 
 # ====== 4. 无需 Nacos（Dubbo 采用直连模式，见 2.4）======
 
@@ -4287,14 +4311,9 @@ crontab -e
 - [ ] HealthRecord 的周/月聚合统计 → Redis Hash 缓存（参考第 4.12 节 Redis 键设计）
 - [ ] **验证：** 首页热门榜显示 Top 5，帖子点赞后热度实时变化，5 分钟后定时全量同步
 
-### Phase 4 — RabbitMQ 提醒系统（1-2 天）
+### Phase 4 — 提醒系统（应用内定时调度，已实现）
 
-- [ ] 在 `reminder-service/` 下创建独立 Maven 模块
-- [ ] 把第 8.2 节的 **RabbitMQConfig 完整代码** 粘进去（包含 TTL 延迟队列 + Dead Letter）
-- [ ] Reminder 实体 + ReminderRepository（参考第 4.9 节）
-- [ ] 第 5.5.6 节 EmailNotifyService、5.5.7 节 ReminderScheduler、5.5.8 节 DelayMessageProducer / DelayMessageConsumer — 四个类直接复制粘贴
-- [ ] 创建宠物档案时，给所有 nextDueAt 在未来 7 天内的疫苗/驱虫记录自动创建 Reminder，并发送延迟消息
-- [ ] **验证：** 把一只宠物的疫苗 nextDueAt 改成 "明天"，等待 ReminderScheduler（1 分钟轮询）或 RabbitMQ 延迟消息触发，提醒出现在"提醒中心"并可"确认完成"（本项目为应用内提醒，无邮件）
+> **已实现**，无需 RabbitMQ。提醒采用 `ReminderScheduler` 定时扫描 + `findAndModify` 原子抢占（见 5.5.7 节），状态流转为 PENDING → SENT → ACKNOWLEDGED / CANCELLED。
 
 ### Phase 5 — Dubbo 微服务拆分（2-3 天）
 
@@ -4405,11 +4424,6 @@ db.pet_profiles.insertMany([
         <groupId>org.apache.commons</groupId>
         <artifactId>commons-pool2</artifactId>
     </dependency>
-    <!-- RabbitMQ -->
-    <dependency>
-        <groupId>org.springframework.boot</groupId>
-        <artifactId>spring-boot-starter-amqp</artifactId>
-    </dependency>
     <!-- Validation -->
     <dependency>
         <groupId>org.springframework.boot</groupId>
@@ -4425,25 +4439,25 @@ db.pet_profiles.insertMany([
         <groupId>org.apache.dubbo</groupId>
         <artifactId>dubbo-spring-boot-starter</artifactId>
     </dependency>
-    <!-- LLM HTTP -->
-    <dependency>
-        <groupId>com.squareup.okhttp3</groupId>
-        <artifactId>okhttp</artifactId>
-        <version>4.12.0</version>
-    </dependency>
-    <dependency>
-        <groupId>com.alibaba.fastjson2</groupId>
-        <artifactId>fastjson2</artifactId>
-    </dependency>
-    <!-- Zipkin -->
+    <!-- 监控指标（Prometheus，仅指标，无链路追踪） -->
     <dependency>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-actuator</artifactId>
     </dependency>
     <dependency>
         <groupId>io.micrometer</groupId>
-        <artifactId>micrometer-tracing-bridge-brave</artifactId>
+        <artifactId>micrometer-registry-prometheus</artifactId>
     </dependency>
+    <!-- Lombok -->
+    <dependency>
+        <groupId>org.projectlombok</groupId>
+        <artifactId>lombok</artifactId>
+        <optional>true</optional>
+    </dependency>
+</dependencies>
+```
+
+> **说明**：以上为 `pethealth-web` 的关键依赖。`okhttp` / `fastjson2`（LLM HTTP 调用）位于 `health-record-service`，不属于 pethealth-web；项目**未使用** Zipkin / `micrometer-tracing-bridge-brave` 链路追踪，也无 `spring-boot-starter-amqp` / `spring-boot-starter-mail`。
     <dependency>
         <groupId>io.zipkin.reporter2</groupId>
         <artifactId>zipkin-reporter-brave</artifactId>

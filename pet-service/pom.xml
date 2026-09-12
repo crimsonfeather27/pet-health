@@ -16,6 +16,12 @@
     <description>宠物档案微服务 · 端口 8081 · Dubbo 20881</description>
 
     <dependencies>
+        <!-- 共享契约：Dubbo 接口 + PetProfile 实体 -->
+        <dependency>
+            <groupId>com.pethealth</groupId>
+            <artifactId>pethealth-api</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>

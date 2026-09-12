@@ -11,11 +11,6 @@ spring:
       # 统一使用 pethealth_web 库（与 pethealth-web 共享 reminders 集合，
       # 保证 Dubbo 路径与 web 降级本地 Repository 读写同一份数据）
       database: pethealth_web
-  rabbitmq:
-    host: localhost
-    port: 5672
-    username: guest
-    password: guest
 
 dubbo:
   application:
@@ -29,17 +24,6 @@ dubbo:
     timeout: 5000
   qos:
     enable: false
-  serialize:
-    security:
-      check:
-        serializable: false
-
-mail:
-  smtp-host: ${SMTP_HOST:smtp.example.com}
-  smtp-port: ${SMTP_PORT:465}
-  smtp-user: ${SMTP_USER:}
-  smtp-password: ${SMTP_PASSWORD:}
-  from: ${MAIL_FROM:pethealth@example.com}
 
 reminder:
   scheduler-interval-seconds: 60
@@ -61,9 +45,6 @@ management:
   endpoint:
     health:
       show-details: always
-  health:
-    rabbit:
-      enabled: false  # RabbitMQ 健康检查不参与整体状态（可降级）
   metrics:
     tags:
       application: ${spring.application.name}

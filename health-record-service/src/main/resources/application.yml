@@ -15,12 +15,6 @@ spring:
       host: localhost
       port: 6379
       database: 2
-  rabbitmq:
-    host: localhost
-    port: 5672
-    username: guest
-    password: guest
-    virtual-host: /
 
 dubbo:
   application:
@@ -35,10 +29,6 @@ dubbo:
     retries: 0
   qos:
     enable: false
-  serialize:
-    security:
-      check:
-        serializable: false
 
 llm:
   api-url: ${LLM_API_URL:https://api.deepseek.com/v1/chat/completions}
@@ -63,9 +53,6 @@ management:
   endpoint:
     health:
       show-details: always
-  health:
-    rabbit:
-      enabled: false  # RabbitMQ 健康检查不参与整体状态（可降级）
   metrics:
     tags:
       application: ${spring.application.name}

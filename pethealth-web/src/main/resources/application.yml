@@ -11,6 +11,8 @@ spring:
     allow-circular-references: true
   application:
     name: PetHealth
+  profiles:
+    active: dev  # 本地开发默认 dev（DataInitializer 仅在 dev 注入演示账号），部署时用环境变量覆盖
   servlet:
     multipart:
       max-file-size: 5MB
@@ -30,18 +32,11 @@ spring:
           max-idle: 8
           min-idle: 0
           max-wait: -1ms
-  rabbitmq:
-    host: localhost
-    port: 5672
-    username: guest
-    password: guest
 
 app:
   llm:
     api-key: ${LLM_API_KEY:}
     model: ${LLM_MODEL:deepseek-chat}
-  rabbitmq:
-    enabled: ${RABBITMQ_ENABLED:false}
   # Dubbo Consumer 开关：true 时优先走 Dubbo 远程调用；false 或调用异常时降级到本地 Repository
   dubbo:
     enabled: ${DUBBO_ENABLED:true}
@@ -55,17 +50,6 @@ dubbo:
     retries: 0
   qos:
     enable: false
-  serialize:
-    security:
-      check:
-        serializable: false
-
-mail:
-  smtp-host: ${SMTP_HOST:}
-  smtp-port: ${SMTP_PORT:465}
-  smtp-user: ${SMTP_USER:}
-  smtp-password: ${SMTP_PASSWORD:}
-  from: ${MAIL_FROM:pethealth@example.com}
 
 reminder:
   scheduler-interval-seconds: 60
@@ -86,9 +70,6 @@ management:
   endpoint:
     health:
       show-details: always
-  health:
-    rabbit:
-      enabled: false  # RabbitMQ 健康检查不参与整体状态（可降级）
   metrics:
     tags:
       application: ${spring.application.name}

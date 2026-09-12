@@ -2,7 +2,9 @@ package com.pethealth.controller;
 
 import com.pethealth.dto.ApiResponse;
 import com.pethealth.entity.Post;
+import com.pethealth.interceptor.AuthContext;
 import com.pethealth.service.PostService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -18,10 +20,11 @@ public class PostController {
     private final PostService postService;
 
     /**
-     * POST /api/posts — 发帖
+     * POST /api/posts — 发帖（authorId/authorName 由服务端登录态注入，不信任客户端）
      */
     @PostMapping
-    public ApiResponse<Post> create(@Valid @RequestBody Post post) {
+    public ApiResponse<Post> create(@Valid @RequestBody Post post, HttpServletRequest request) {
+        post.setAuthorId(AuthContext.requireUserId(request));
         Post saved = postService.create(post);
         return ApiResponse.success(saved);
     }
@@ -62,19 +65,20 @@ public class PostController {
     }
 
     /**
-     * PUT /api/posts/{id} — 编辑帖子
+     * PUT /api/posts/{id} — 编辑帖子（仅帖主）
      */
     @PutMapping("/{id}")
-    public ApiResponse<Post> update(@PathVariable String id, @Valid @RequestBody Post updates) {
-        return ApiResponse.success(postService.update(id, updates));
+    public ApiResponse<Post> update(@PathVariable String id, @Valid @RequestBody Post updates,
+                                    HttpServletRequest request) {
+        return ApiResponse.success(postService.update(id, updates, AuthContext.requireUserId(request)));
     }
 
     /**
-     * DELETE /api/posts/{id} — 删除帖子
+     * DELETE /api/posts/{id} — 删除帖子（仅帖主）
      */
     @DeleteMapping("/{id}")
-    public ApiResponse<Void> delete(@PathVariable String id) {
-        postService.delete(id);
+    public ApiResponse<Void> delete(@PathVariable String id, HttpServletRequest request) {
+        postService.delete(id, AuthContext.requireUserId(request));
         return ApiResponse.success("删除成功", null);
     }
 }

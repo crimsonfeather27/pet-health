@@ -2,9 +2,12 @@ package com.pethealth.controller;
 
 import com.pethealth.dto.ApiResponse;
 import com.pethealth.entity.HealthRecord;
+import com.pethealth.exception.AccessDeniedException;
+import com.pethealth.interceptor.AuthContext;
 import com.pethealth.repository.HealthRecordRepository;
 import com.pethealth.service.HealthRecordStatsService;
 import com.pethealth.service.dubbo.HealthRecordDubboService;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.dubbo.config.annotation.DubboReference;
@@ -90,7 +93,9 @@ public class HealthRecordController {
     }
 
     @PostMapping
-    public ApiResponse<HealthRecord> create(@RequestBody HealthRecord record) {
+    public ApiResponse<HealthRecord> create(@RequestBody HealthRecord record, HttpServletRequest request) {
+        // ownerId 由服务端登录态注入，不信任客户端
+        record.setOwnerId(AuthContext.requireUserId(request));
         if (record.getRecordedAt() == null) {
             record.setRecordedAt(LocalDateTime.now());
         }
@@ -99,51 +104,75 @@ public class HealthRecordController {
         if (dubboEnabled) {
             try {
                 HealthRecord saved = healthRecordDubboService.create(record);
+                invalidateRecordStats(saved.getPetId());
                 return ApiResponse.success(saved);
             } catch (Exception e) {
                 log.warn("Dubbo create 调用失败，降级本地: {}", e.getMessage());
             }
         }
         HealthRecord saved = healthRecordRepository.save(record);
-        if (saved.getPetId() != null) statsService.invalidateCache(saved.getPetId());
+        invalidateRecordStats(saved.getPetId());
         return ApiResponse.success(saved);
     }
 
     @PutMapping("/{id}")
-    public ApiResponse<HealthRecord> update(@PathVariable String id, @RequestBody HealthRecord updates) {
+    public ApiResponse<HealthRecord> update(@PathVariable String id, @RequestBody HealthRecord updates,
+                                            HttpServletRequest request) {
+        checkRecordOwner(id, request);
         return healthRecordRepository.findById(id).map(existing -> {
+            // #12：记录可能被改挂到另一只宠物，旧/新 petId 的缓存都要失效
+            String oldPetId = existing.getPetId();
             if (updates.getRecordType() != null) existing.setRecordType(updates.getRecordType());
             if (updates.getValue() != null) existing.setValue(updates.getValue());
             if (updates.getNotes() != null) existing.setNotes(updates.getNotes());
             if (updates.getPetId() != null) existing.setPetId(updates.getPetId());
             if (updates.getRecordedAt() != null) existing.setRecordedAt(updates.getRecordedAt());
             HealthRecord saved = healthRecordRepository.save(existing);
-            statsService.invalidateCache(existing.getPetId());
-            // 同步失效远端缓存
-            if (dubboEnabled) {
-                try {
-                    healthRecordDubboService.invalidateStats(existing.getPetId());
-                } catch (Exception e) {
-                    log.debug("Dubbo invalidateStats 失败（非关键）: {}", e.getMessage());
-                }
-            }
+            invalidateRecordStats(oldPetId, saved.getPetId());
             return ApiResponse.success(saved);
         }).orElse(ApiResponse.error(404, "健康记录不存在"));
     }
 
     @DeleteMapping("/{id}")
-    public ApiResponse<Void> delete(@PathVariable String id) {
+    public ApiResponse<Void> delete(@PathVariable String id, HttpServletRequest request) {
+        checkRecordOwner(id, request);
         return healthRecordRepository.findById(id).map(existing -> {
             healthRecordRepository.deleteById(id);
-            statsService.invalidateCache(existing.getPetId());
-            if (dubboEnabled) {
-                try {
-                    healthRecordDubboService.invalidateStats(existing.getPetId());
-                } catch (Exception e) {
-                    log.debug("Dubbo invalidateStats 失败（非关键）: {}", e.getMessage());
-                }
-            }
+            invalidateRecordStats(existing.getPetId());
             return ApiResponse.<Void>success("删除成功", null);
         }).orElse(ApiResponse.error(404, "健康记录不存在"));
+    }
+
+    /**
+     * #11 失效对称：本地 + Dubbo 双侧失效；#12 宠物换绑时传入新旧 petId 全部清掉
+     */
+    private void invalidateRecordStats(String... petIds) {
+        for (String petId : petIds) {
+            if (petId == null || petId.isBlank()) continue;
+            try {
+                statsService.invalidateCache(petId);
+            } catch (Exception e) {
+                log.debug("本地统计缓存失效失败（非关键）: petId={}, {}", petId, e.getMessage());
+            }
+            if (dubboEnabled) {
+                try {
+                    healthRecordDubboService.invalidateStats(petId);
+                } catch (Exception e) {
+                    log.debug("Dubbo invalidateStats 失败（非关键）: petId={}, {}", petId, e.getMessage());
+                }
+            }
+        }
+    }
+
+    /** 属主校验：仅记录归属人可编辑/删除（Dubbo 调用前先校验，避免越权穿透） */
+    private void checkRecordOwner(String recordId, HttpServletRequest request) {
+        String userId = AuthContext.requireUserId(request);
+        HealthRecord record = healthRecordRepository.findById(recordId).orElse(null);
+        if (record == null) {
+            throw new com.pethealth.config.GlobalExceptionHandler.ResourceNotFoundException("健康记录不存在: " + recordId);
+        }
+        if (!userId.equals(record.getOwnerId())) {
+            throw new AccessDeniedException("无权操作他人健康记录");
+        }
     }
 }

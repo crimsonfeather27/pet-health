@@ -1,6 +1,7 @@
 package com.pethealth.service;
 
 import com.pethealth.entity.User;
+import com.pethealth.exception.ServiceUnavailableException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
@@ -44,7 +45,10 @@ public class AuthService {
             redisTemplate.expire(TOKEN_KEY_PREFIX + token, TOKEN_TTL);
             log.info("为用户 {} 创建登录 Token", user.getUsername());
         } catch (Exception e) {
-            log.warn("Redis 写入 Token 失败（降级到无会话）: {}", e.getMessage());
+            // #23：会话写不进 Redis 等于没登录成功——绝不能把"假 token"发给前端
+            // （否则用户以为已登录，后续所有写接口全部 401，体验割裂且难排查）
+            log.error("Redis 写入 Token 失败，拒绝登录: {}", e.getMessage());
+            throw new ServiceUnavailableException("登录服务暂不可用，请稍后再试");
         }
         return token;
     }

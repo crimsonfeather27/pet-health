@@ -6,9 +6,9 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 健康记录 Dubbo 服务接口（Consumer 侧）
+ * 健康记录 Dubbo 服务接口（共享契约）
  * <p>
- * 由 health-record-service 提供。设计文档 7.2 节。
+ * 由 health-record-service 提供实现，pethealth-web 通过 Dubbo 调用。设计文档 7.2 节。
  */
 public interface HealthRecordDubboService {
 

@@ -3,9 +3,9 @@ package com.pethealth.service.dubbo;
 import java.util.Map;
 
 /**
- * AI 诊断 Dubbo 服务接口（Provider 侧）
+ * AI 诊断 Dubbo 服务接口（共享契约）
  * <p>
- * 由 health-record-service 提供，pethealth-web 通过 Dubbo 调用。设计文档 7.3 节。
+ * 由 health-record-service 提供实现，pethealth-web 通过 Dubbo 调用。设计文档 7.3 节。
  */
 public interface AIDiagnosisDubboService {
 

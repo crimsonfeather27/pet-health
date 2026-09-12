@@ -19,12 +19,10 @@ public class SecurityConfig {
     }
 
     /**
-     * Phase 1 策略：放通所有请求，Session 用 HttpSession（不启用 Spring Security 的表单登录）
-     * <p>
-     * 原因：
-     * 1. Phase 1 用 HttpSession 自己管理登录态（UserController 里 session.setAttribute）
-     * 2. 静态资源（index.html / script.js / styles.css）必须能直接访问
-     * 3. 所有 API 先开放，Phase 5 拆微服务后再加更细粒度的安全
+     * Spring Security 仅作为基础组件（BCrypt 密码编码、Session 策略），
+     * 放通所有请求 —— API 层鉴权由 AuthInterceptor 承担：
+     * 写接口（POST/PUT/DELETE）要求 Bearer Token，属主校验由 Service 层 OwnershipGuard 完成。
+     * 静态资源（index.html / script.js / styles.css）必须能直接访问。
      */
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {

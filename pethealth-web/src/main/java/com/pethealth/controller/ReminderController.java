@@ -2,8 +2,11 @@ package com.pethealth.controller;
 
 import com.pethealth.dto.ApiResponse;
 import com.pethealth.entity.Reminder;
+import com.pethealth.exception.AccessDeniedException;
+import com.pethealth.interceptor.AuthContext;
 import com.pethealth.service.ReminderService;
 import com.pethealth.service.dubbo.ReminderDubboService;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.dubbo.config.annotation.DubboReference;
@@ -74,15 +77,15 @@ public class ReminderController {
     }
 
     /**
-     * POST /api/reminders — 创建提醒
+     * POST /api/reminders — 创建提醒（ownerId 由服务端登录态注入）
      * <p>
-     * 本地 ReminderService 包含自动创建延迟消息 + 邮箱补全逻辑，更完整；
-     * Dubbo 仅做最简存储。优先走本地，仅在显式 dubbo+no-local 时才走 Dubbo。
-     * 这里保留本地实现以维持 Phase 4 的延迟消息链路。
+     * 本地 ReminderService 含宠物名/属主补全逻辑；Dubbo 路径仅做最简存储，
+     * 两者共享同一 MongoDB 库，数据最终一致。
      */
     @PostMapping
-    public ApiResponse<Reminder> create(@RequestBody Reminder reminder) {
-        // 始终走本地（保持 RabbitMQ 延迟消息链路完整）
+    public ApiResponse<Reminder> create(@RequestBody Reminder reminder, HttpServletRequest request) {
+        // ownerId 由服务端登录态注入，不信任客户端传入的 ownerId/email
+        reminder.setOwnerId(AuthContext.requireUserId(request));
         Reminder saved = reminderService.create(reminder);
         // Dubbo 同步一份到 reminder-service（best-effort，失败不影响主流程）
         if (dubboEnabled) {
@@ -96,49 +99,65 @@ public class ReminderController {
     }
 
     /**
-     * PUT /api/reminders/{id}/cancel — 取消
+     * PUT /api/reminders/{id}/cancel — 取消（仅提醒属主）
      */
     @PutMapping("/{id}/cancel")
-    public ApiResponse<Reminder> cancel(@PathVariable String id) {
-        Reminder r = reminderService.cancel(id);
+    public ApiResponse<Reminder> cancel(@PathVariable String id, HttpServletRequest request) {
+        Reminder r = reminderService.cancel(id, AuthContext.requireUserId(request));
         if (r == null) return ApiResponse.error(404, "提醒不存在");
         return ApiResponse.success(r);
     }
 
     /**
-     * PUT /api/reminders/{id}/acknowledge — 确认
+     * PUT /api/reminders/{id}/acknowledge — 确认（仅提醒属主）
      */
     @PutMapping("/{id}/acknowledge")
-    public ApiResponse<Reminder> acknowledge(@PathVariable String id) {
+    public ApiResponse<Reminder> acknowledge(@PathVariable String id, HttpServletRequest request) {
+        String userId = AuthContext.requireUserId(request);
         if (dubboEnabled) {
             try {
                 Reminder r = reminderDubboService.acknowledge(id);
-                if (r != null) return ApiResponse.success(r);
+                if (r != null) {
+                    checkReminderOwner(r, userId);
+                    return ApiResponse.success(r);
+                }
+            } catch (AccessDeniedException e) {
+                throw e;
             } catch (Exception e) {
                 log.warn("Dubbo acknowledge 调用失败，降级本地: {}", e.getMessage());
             }
         }
-        Reminder r = reminderService.acknowledge(id);
+        Reminder r = reminderService.acknowledge(id, userId);
         if (r == null) return ApiResponse.error(404, "提醒不存在");
         return ApiResponse.success(r);
     }
 
     /**
-     * PUT /api/reminders/{id} — 编辑提醒（仅 PENDING 可编辑）
+     * PUT /api/reminders/{id} — 编辑提醒（仅 PENDING 可编辑，且仅提醒属主）
      */
     @PutMapping("/{id}")
-    public ApiResponse<Reminder> update(@PathVariable String id, @RequestBody Reminder patch) {
-        Reminder r = reminderService.update(id, patch);
+    public ApiResponse<Reminder> update(@PathVariable String id, @RequestBody Reminder patch,
+                                        HttpServletRequest request) {
+        Reminder r = reminderService.update(id, patch, AuthContext.requireUserId(request));
         if (r == null) return ApiResponse.error(404, "提醒不存在或当前状态不可编辑");
         return ApiResponse.success(r);
     }
 
     /**
-     * DELETE /api/reminders/{id} — 删除提醒
+     * DELETE /api/reminders/{id} — 删除提醒（仅提醒属主）
      */
     @DeleteMapping("/{id}")
-    public ApiResponse<Void> delete(@PathVariable String id) {
-        if (!reminderService.delete(id)) return ApiResponse.error(404, "提醒不存在");
+    public ApiResponse<Void> delete(@PathVariable String id, HttpServletRequest request) {
+        if (!reminderService.delete(id, AuthContext.requireUserId(request))) {
+            return ApiResponse.error(404, "提醒不存在");
+        }
         return ApiResponse.success(null);
+    }
+
+    /** Dubbo 路径返回的提醒也需校验属主（防止 Dubbo 路径绕过本地校验） */
+    private void checkReminderOwner(Reminder reminder, String userId) {
+        if (userId == null || !userId.equals(reminder.getOwnerId())) {
+            throw new AccessDeniedException("无权操作他人提醒");
+        }
     }
 }

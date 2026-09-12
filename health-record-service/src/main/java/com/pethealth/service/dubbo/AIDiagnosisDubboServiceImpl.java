@@ -331,8 +331,10 @@ public class AIDiagnosisDubboServiceImpl implements AIDiagnosisDubboService {
         conn.setRequestProperty("Content-Type", "application/json");
         conn.setRequestProperty("Authorization", "Bearer " + apiKey);
         conn.setDoOutput(true);
-        conn.setConnectTimeout(10_000);
-        conn.setReadTimeout(30_000);
+        // HTTP 超时总和必须小于 Dubbo provider.timeout(10s)，否则 LLM 稍慢时
+        // consumer 端先超时降级再本地重调一次 LLM，导致双倍延迟与双倍费用
+        conn.setConnectTimeout(2_000);
+        conn.setReadTimeout(7_000);
 
         try (OutputStream os = conn.getOutputStream()) {
             os.write(body.getBytes(StandardCharsets.UTF_8));

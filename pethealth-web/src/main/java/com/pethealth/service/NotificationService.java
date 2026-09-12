@@ -2,6 +2,7 @@ package com.pethealth.service;
 
 import com.pethealth.config.GlobalExceptionHandler.ResourceNotFoundException;
 import com.pethealth.entity.Notification;
+import com.pethealth.exception.AccessDeniedException;
 import com.pethealth.repository.NotificationRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -46,24 +47,37 @@ public class NotificationService {
         return notificationRepository.countByOwnerIdAndIsReadFalse(ownerId);
     }
 
-    public Notification markRead(String id) {
+    /** 标记单条已读（仅通知接收者本人） */
+    public Notification markRead(String id, String currentUserId) {
         Notification n = notificationRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("通知不存在: " + id));
+        checkOwner(currentUserId, n.getOwnerId());
         n.setIsRead(true);
         return notificationRepository.save(n);
     }
 
     /**
-     * 全部标记已读，返回被标记的数量
+     * 全部标记已读（仅本人），返回被标记的数量
      */
-    public long markAllRead(String ownerId) {
+    public long markAllRead(String ownerId, String currentUserId) {
+        checkOwner(currentUserId, ownerId);
         List<Notification> list = notificationRepository.findByOwnerIdOrderByCreatedAtDesc(ownerId);
         list.forEach(n -> n.setIsRead(true));
         notificationRepository.saveAll(list);
         return list.size();
     }
 
-    public void delete(String id) {
+    /** 删除站内信（仅接收者本人） */
+    public void delete(String id, String currentUserId) {
+        Notification n = notificationRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("通知不存在: " + id));
+        checkOwner(currentUserId, n.getOwnerId());
         notificationRepository.deleteById(id);
+    }
+
+    private void checkOwner(String currentUserId, String ownerId) {
+        if (currentUserId == null || !currentUserId.equals(ownerId)) {
+            throw new AccessDeniedException("无权操作他人通知");
+        }
     }
 }

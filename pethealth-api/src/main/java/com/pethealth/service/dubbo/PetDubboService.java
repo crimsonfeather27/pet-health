@@ -5,11 +5,10 @@ import com.pethealth.entity.PetProfile;
 import java.util.List;
 
 /**
- * 宠物档案 Dubbo 服务接口（Provider 侧）
+ * 宠物档案 Dubbo 服务接口（共享契约）
  * <p>
- * 纯 Java interface，无 Dubbo 注解。方法签名与 pethealth-web Consumer 侧完全一致，
- * 由 PetDubboServiceImpl 标注 @DubboService 暴露服务。
- * <p>
+ * 由 pet-service 提供实现（@DubboService），pethealth-web 通过 @DubboReference 调用。
+ * 接口在 Consumer / Provider 两侧共用本模块同一源码，避免签名漂移导致的运行时失败。
  * 设计文档 7.0 / 7.1 节。
  */
 public interface PetDubboService {
