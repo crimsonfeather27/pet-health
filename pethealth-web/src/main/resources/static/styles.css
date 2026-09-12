@@ -249,6 +249,10 @@ section h2 {
     border-color: #3873B6;
     background: rgba(56,115,182,0.05);
 }
+/* 仅导航栏用户区的登录按钮使用白色文字，不影响其他 .btn-secondary 实例 */
+#user-section > .btn-secondary {
+    color: #ffffff;
+}
 .btn-danger {
     background: transparent;
     border: 1px solid rgba(224,82,82,0.35);
@@ -345,7 +349,11 @@ section h2 {
     letter-spacing: 0.02em;
 }
 .modal-close {
-    position: absolute; top: 0.75rem; right: 0.75rem;
+    position: sticky; top: calc(0.75rem - 8px);
+    float: right;
+    /* 负外边距抵消容器内边距，使初始位置与吸顶位置完全重合：滚动时按钮纹丝不动 */
+    margin: calc(-1.25rem - 8px) -1.45rem 0.25rem 0.5rem;
+    z-index: 5;
     width: 30px; height: 30px;
     background: var(--bg);
     border: none;
@@ -368,11 +376,12 @@ section h2 {
     max-width: 92vw;
     max-height: 86vh;
     overflow-y: auto;
-    scrollbar-width: none;
+    /* 常驻细滚动条 + 稳定槽位：滚动条出现/消失不再挤压内容宽度，消除文字排版移动 */
+    scrollbar-width: thin;
+    scrollbar-color: rgba(56,115,182,0.25) transparent;
+    scrollbar-gutter: stable;
 }
 .modal-content-wide::-webkit-scrollbar { width: 6px; }
-.modal-content-wide:hover { scrollbar-width: thin; }
-.modal-content-wide:hover::-webkit-scrollbar { width: 6px; }
 .modal-content-wide::-webkit-scrollbar-thumb { background: rgba(56,115,182,0.2); border-radius: 3px; }
 .modal-content-wide::-webkit-scrollbar-track { background: transparent; }
 .pet-detail-header {
@@ -567,11 +576,12 @@ section h2 {
     max-height: 320px;
     overflow-y: auto;
     padding-right: 0.25rem;
-    scrollbar-width: none;
+    /* 常驻细滚动条 + 稳定槽位：出现/消失不再挤压内容宽度 */
+    scrollbar-width: thin;
+    scrollbar-color: rgba(56,115,182,0.25) transparent;
+    scrollbar-gutter: stable;
 }
 .replies-list::-webkit-scrollbar { width: 6px; }
-.replies-list:hover { scrollbar-width: thin; }
-.replies-list:hover::-webkit-scrollbar { width: 6px; }
 .replies-list::-webkit-scrollbar-thumb { background: rgba(56,115,182,0.2); border-radius: 3px; }
 .replies-list::-webkit-scrollbar-track { background: transparent; }
 .reply-item {
@@ -1030,15 +1040,12 @@ section h2 {
     max-height: 480px;
     overflow-y: auto;
     padding-right: 0.25rem;
-    scrollbar-width: none;
+    /* 常驻细滚动条 + 稳定槽位：出现/消失不再挤压内容宽度 */
+    scrollbar-width: thin;
+    scrollbar-color: rgba(56,115,182,0.25) transparent;
+    scrollbar-gutter: stable;
 }
 #health-records-list::-webkit-scrollbar {
-    width: 6px;
-}
-#health-records-list:hover {
-    scrollbar-width: thin;
-}
-#health-records-list:hover::-webkit-scrollbar {
     width: 6px;
 }
 #health-records-list::-webkit-scrollbar-thumb {
