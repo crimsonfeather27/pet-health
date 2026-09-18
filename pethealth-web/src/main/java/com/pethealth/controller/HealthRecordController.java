@@ -6,6 +6,7 @@ import com.pethealth.exception.AccessDeniedException;
 import com.pethealth.interceptor.AuthContext;
 import com.pethealth.repository.HealthRecordRepository;
 import com.pethealth.service.HealthRecordStatsService;
+import com.pethealth.service.OwnershipGuard;
 import com.pethealth.service.dubbo.HealthRecordDubboService;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
@@ -28,6 +29,7 @@ public class HealthRecordController {
 
     private final HealthRecordRepository healthRecordRepository;
     private final HealthRecordStatsService statsService;
+    private final OwnershipGuard ownershipGuard;
 
     /**
      * Dubbo Consumer —— 直连 health-record-service（端口 20885）
@@ -43,7 +45,9 @@ public class HealthRecordController {
     private boolean dubboEnabled;
 
     @GetMapping("/pet/{petId}")
-    public ApiResponse<List<HealthRecord>> byPet(@PathVariable String petId) {
+    public ApiResponse<List<HealthRecord>> byPet(@PathVariable String petId, HttpServletRequest request) {
+        // 先校验这只宠物属于当前登录用户，防止枚举 petId 拖取他人病历
+        ownershipGuard.requireOwnedPet(request, petId);
         if (dubboEnabled) {
             try {
                 // Dubbo 接口默认分页，传一个较大的 size 拿全部
@@ -59,16 +63,25 @@ public class HealthRecordController {
     @GetMapping
     public ApiResponse<Page<HealthRecord>> list(
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "10") int size) {
-        // 分页查询保留本地（Dubbo 接口未直接暴露 Page）
-        return ApiResponse.success(healthRecordRepository.findAll(PageRequest.of(page, size)));
+            @RequestParam(defaultValue = "10") int size,
+            HttpServletRequest request) {
+        // 私有数据：只返回当前登录用户自己的健康记录
+        String userId = AuthContext.requireUserId(request);
+        return ApiResponse.success(
+                healthRecordRepository.findByOwnerId(userId, PageRequest.of(page, size)));
     }
 
     @GetMapping("/{id}")
-    public ApiResponse<HealthRecord> get(@PathVariable String id) {
-        return healthRecordRepository.findById(id)
-                .map(ApiResponse::success)
-                .orElse(ApiResponse.error(404, "健康记录不存在"));
+    public ApiResponse<HealthRecord> get(@PathVariable String id, HttpServletRequest request) {
+        HealthRecord record = healthRecordRepository.findById(id).orElse(null);
+        if (record == null) {
+            return ApiResponse.error(404, "健康记录不存在");
+        }
+        String userId = AuthContext.requireUserId(request);
+        if (!userId.equals(record.getOwnerId())) {
+            throw new AccessDeniedException("无权访问他人健康记录");
+        }
+        return ApiResponse.success(record);
     }
 
     /**
@@ -78,7 +91,10 @@ public class HealthRecordController {
     @GetMapping("/pet/{petId}/trends")
     public ApiResponse<Map<String, Object>> trends(
             @PathVariable String petId,
-            @RequestParam(defaultValue = "weekly") String period) {
+            @RequestParam(defaultValue = "weekly") String period,
+            HttpServletRequest request) {
+        // 属主校验先行，避免他人 petId 的统计数据泄露
+        ownershipGuard.requireOwnedPet(request, petId);
         if (dubboEnabled) {
             try {
                 Map<String, Object> stats = "monthly".equalsIgnoreCase(period)
@@ -95,7 +111,12 @@ public class HealthRecordController {
     @PostMapping
     public ApiResponse<HealthRecord> create(@RequestBody HealthRecord record, HttpServletRequest request) {
         // ownerId 由服务端登录态注入，不信任客户端
-        record.setOwnerId(AuthContext.requireUserId(request));
+        String userId = AuthContext.requireUserId(request);
+        record.setOwnerId(userId);
+        // 记录必须挂在本人宠物下，防止给他人宠物伪造病历
+        if (record.getPetId() != null && !record.getPetId().isBlank()) {
+            ownershipGuard.requireOwnedPet(request, record.getPetId());
+        }
         if (record.getRecordedAt() == null) {
             record.setRecordedAt(LocalDateTime.now());
         }
@@ -125,6 +146,10 @@ public class HealthRecordController {
             if (updates.getRecordType() != null) existing.setRecordType(updates.getRecordType());
             if (updates.getValue() != null) existing.setValue(updates.getValue());
             if (updates.getNotes() != null) existing.setNotes(updates.getNotes());
+            // 改挂目标宠物也必须是本人的
+            if (updates.getPetId() != null && !updates.getPetId().equals(oldPetId)) {
+                ownershipGuard.requireOwnedPet(request, updates.getPetId());
+            }
             if (updates.getPetId() != null) existing.setPetId(updates.getPetId());
             if (updates.getRecordedAt() != null) existing.setRecordedAt(updates.getRecordedAt());
             HealthRecord saved = healthRecordRepository.save(existing);

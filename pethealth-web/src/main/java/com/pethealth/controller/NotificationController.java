@@ -18,19 +18,20 @@ public class NotificationController {
     private final NotificationService notificationService;
 
     /**
-     * GET /api/notifications?ownerId=xxx — 站内信列表（按时间倒序）
+     * GET /api/notifications — 当前登录用户的站内信列表（按时间倒序）。
+     * ownerId 一律取登录态，忽略客户端参数。
      */
     @GetMapping
-    public ApiResponse<List<Notification>> list(@RequestParam String ownerId) {
-        return ApiResponse.success(notificationService.list(ownerId));
+    public ApiResponse<List<Notification>> list(HttpServletRequest request) {
+        return ApiResponse.success(notificationService.list(AuthContext.requireUserId(request)));
     }
 
     /**
-     * GET /api/notifications/unread-count?ownerId=xxx — 未读数
+     * GET /api/notifications/unread-count — 当前用户未读数
      */
     @GetMapping("/unread-count")
-    public ApiResponse<Long> unreadCount(@RequestParam String ownerId) {
-        return ApiResponse.success(notificationService.unreadCount(ownerId));
+    public ApiResponse<Long> unreadCount(HttpServletRequest request) {
+        return ApiResponse.success(notificationService.unreadCount(AuthContext.requireUserId(request)));
     }
 
     /**
@@ -42,12 +43,13 @@ public class NotificationController {
     }
 
     /**
-     * PUT /api/notifications/read-all?ownerId=xxx — 全部标记已读（仅本人）
+     * PUT /api/notifications/read-all — 当前用户全部标记已读
      */
     @PutMapping("/read-all")
-    public ApiResponse<Long> markAllRead(@RequestParam String ownerId, HttpServletRequest request) {
+    public ApiResponse<Long> markAllRead(HttpServletRequest request) {
+        String userId = AuthContext.requireUserId(request);
         return ApiResponse.success("已全部标记为已读",
-                notificationService.markAllRead(ownerId, AuthContext.requireUserId(request)));
+                notificationService.markAllRead(userId, userId));
     }
 
     /**

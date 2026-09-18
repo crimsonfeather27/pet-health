@@ -4,6 +4,7 @@ import com.pethealth.dto.ApiResponse;
 import com.pethealth.entity.Reminder;
 import com.pethealth.exception.AccessDeniedException;
 import com.pethealth.interceptor.AuthContext;
+import com.pethealth.service.OwnershipGuard;
 import com.pethealth.service.ReminderService;
 import com.pethealth.service.dubbo.ReminderDubboService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -22,6 +23,7 @@ import java.util.List;
 public class ReminderController {
 
     private final ReminderService reminderService;
+    private final OwnershipGuard ownershipGuard;
 
     /**
      * Dubbo Consumer —— 直连 reminder-service（端口 20884）
@@ -37,43 +39,40 @@ public class ReminderController {
     private boolean dubboEnabled;
 
     /**
-     * GET /api/reminders?ownerId=xxx — 查询某用户的提醒
-     * GET /api/reminders?petId=xxx — 查询某宠物的提醒（仅本地服务支持）
+     * GET /api/reminders — 查询当前登录用户的提醒
+     * GET /api/reminders?petId=xxx — 查询某宠物的提醒（需为该宠物属主）
+     * <p>
+     * 忽略客户端传入的 ownerId，一律以登录态为准，防止水平越权。
      */
     @GetMapping
     public ApiResponse<List<Reminder>> list(@RequestParam(required = false) String ownerId,
-                                            @RequestParam(required = false) String petId) {
+                                            @RequestParam(required = false) String petId,
+                                            HttpServletRequest request) {
+        String userId = AuthContext.requireUserId(request);
         if (petId != null) {
-            // Dubbo 接口未提供 findByPet，仅本地支持
+            // 按宠物查询前先确认宠物属于当前用户
+            ownershipGuard.requireOwnedPet(request, petId);
             return ApiResponse.success(reminderService.findByPet(petId));
         }
-        if (ownerId != null) {
-            if (dubboEnabled) {
-                try {
-                    return ApiResponse.success(reminderDubboService.findByOwnerId(ownerId));
-                } catch (Exception e) {
-                    log.warn("Dubbo findByOwnerId 调用失败，降级本地: {}", e.getMessage());
-                }
+        if (dubboEnabled) {
+            try {
+                return ApiResponse.success(reminderDubboService.findByOwnerId(userId));
+            } catch (Exception e) {
+                log.warn("Dubbo findByOwnerId 调用失败，降级本地: {}", e.getMessage());
             }
-            return ApiResponse.success(reminderService.findByOwner(ownerId));
         }
-        return ApiResponse.success(List.of());
+        return ApiResponse.success(reminderService.findByOwner(userId));
     }
 
     /**
-     * GET /api/reminders/due?days=7 — 即将到期（未来 N 天内）
+     * GET /api/reminders/due?days=7 — 当前用户即将到期（未来 N 天内）
      */
     @GetMapping("/due")
-    public ApiResponse<List<Reminder>> due(@RequestParam(defaultValue = "7") int days) {
-        // Dubbo 接口按小时查询，days*24 转换
-        if (dubboEnabled) {
-            try {
-                return ApiResponse.success(reminderDubboService.findPendingWithin(days * 24));
-            } catch (Exception e) {
-                log.warn("Dubbo findPendingWithin 调用失败，降级本地: {}", e.getMessage());
-            }
-        }
-        return ApiResponse.success(reminderService.findDueWithin(days));
+    public ApiResponse<List<Reminder>> due(@RequestParam(defaultValue = "7") int days,
+                                           HttpServletRequest request) {
+        String userId = AuthContext.requireUserId(request);
+        // 安全优先：Dubbo findPendingWithin 不支持按属主过滤，用户侧只走本地属主过滤查询
+        return ApiResponse.success(reminderService.findDueWithin(userId, days));
     }
 
     /**
@@ -86,6 +85,10 @@ public class ReminderController {
     public ApiResponse<Reminder> create(@RequestBody Reminder reminder, HttpServletRequest request) {
         // ownerId 由服务端登录态注入，不信任客户端传入的 ownerId/email
         reminder.setOwnerId(AuthContext.requireUserId(request));
+        // 关联宠物必须是本人的
+        if (reminder.getPetId() != null && !reminder.getPetId().isBlank()) {
+            ownershipGuard.requireOwnedPet(request, reminder.getPetId());
+        }
         Reminder saved = reminderService.create(reminder);
         // Dubbo 同步一份到 reminder-service（best-effort，失败不影响主流程）
         if (dubboEnabled) {
@@ -138,6 +141,10 @@ public class ReminderController {
     @PutMapping("/{id}")
     public ApiResponse<Reminder> update(@PathVariable String id, @RequestBody Reminder patch,
                                         HttpServletRequest request) {
+        // 改关联宠物时，目标宠物必须是本人的
+        if (patch.getPetId() != null && !patch.getPetId().isBlank()) {
+            ownershipGuard.requireOwnedPet(request, patch.getPetId());
+        }
         Reminder r = reminderService.update(id, patch, AuthContext.requireUserId(request));
         if (r == null) return ApiResponse.error(404, "提醒不存在或当前状态不可编辑");
         return ApiResponse.success(r);

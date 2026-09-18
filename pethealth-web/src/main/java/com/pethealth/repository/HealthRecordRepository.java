@@ -13,4 +13,5 @@ public interface HealthRecordRepository extends MongoRepository<HealthRecord, St
     Page<HealthRecord> findByPetIdOrderByRecordedAtDesc(String petId, Pageable pageable);
     List<HealthRecord> findByPetIdAndRecordedAtBetween(String petId, LocalDateTime start, LocalDateTime end);
     List<HealthRecord> findByOwnerId(String ownerId);
+    Page<HealthRecord> findByOwnerId(String ownerId, Pageable pageable);
 }

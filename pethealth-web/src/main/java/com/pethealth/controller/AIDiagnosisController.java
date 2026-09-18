@@ -2,6 +2,7 @@ package com.pethealth.controller;
 
 import com.pethealth.dto.ApiResponse;
 import com.pethealth.interceptor.AuthContext;
+import com.pethealth.service.OwnershipGuard;
 import com.pethealth.service.RateLimitService;
 import com.pethealth.service.dubbo.AIDiagnosisDubboService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -45,6 +46,7 @@ public class AIDiagnosisController {
     private boolean dubboEnabled;
 
     private final RateLimitService rateLimitService;
+    private final OwnershipGuard ownershipGuard;
 
     /** AI 诊断限流：每用户每分钟 10 次（防止滥用 / 控制 LLM 成本） */
     private static final int AI_DIAGNOSIS_LIMIT = 10;
@@ -80,6 +82,11 @@ public class AIDiagnosisController {
 
         String symptomsStr = toSymptomsString(req.getOrDefault("symptoms", ""));
 
+        // 选中具体宠物时，必须是本人的宠物，防止借诊断拖取他人宠物病史
+        if (petId != null && !petId.isBlank()) {
+            ownershipGuard.requireOwnedPet(request, petId);
+        }
+
         log.info("AI诊断请求: species={}, breed={}, age={}月, symptoms={}, duration={}, 携带请求级Key={}",
                 species, breed, ageMonths, symptomsStr, duration,
                 llmApiKey != null && !llmApiKey.isBlank());
@@ -103,18 +110,22 @@ public class AIDiagnosisController {
     }
 
     /**
-     * GET /api/ai-diagnosis/report?ownerId=xxx&petId=xxx&period=WEEKLY
-     * 调用 Dubbo 生成健康报告
+     * GET /api/ai-diagnosis/report?petId=xxx&period=WEEKLY
+     * 调用 Dubbo 生成健康报告。
+     * ownerId 不再接受客户端传入，一律取登录态；petId 必须属于当前用户。
      */
     @GetMapping("/report")
-    public ApiResponse<String> report(@RequestParam String ownerId,
+    public ApiResponse<String> report(@RequestParam(required = false) String ownerId,
                                       @RequestParam String petId,
-                                      @RequestParam(defaultValue = "WEEKLY") String period) {
+                                      @RequestParam(defaultValue = "WEEKLY") String period,
+                                      HttpServletRequest request) {
+        String userId = AuthContext.requireUserId(request);
+        ownershipGuard.requireOwnedPet(request, petId);
         if (!dubboEnabled) {
             return ApiResponse.error(503, "Dubbo 未启用，健康报告生成服务不可用");
         }
         try {
-            String report = aiDiagnosisDubboService.generateHealthReport(ownerId, petId, period);
+            String report = aiDiagnosisDubboService.generateHealthReport(userId, petId, period);
             return ApiResponse.success(report);
         } catch (Exception e) {
             log.warn("Dubbo generateHealthReport 调用失败: {}", e.getMessage());

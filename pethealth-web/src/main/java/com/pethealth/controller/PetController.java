@@ -56,42 +56,41 @@ public class PetController {
     private boolean dubboEnabled;
 
     @GetMapping
-    public ApiResponse<List<PetProfile>> list(@RequestParam(required = false) String ownerId) {
-        if (dubboEnabled && ownerId != null && !ownerId.isBlank()) {
+    public ApiResponse<List<PetProfile>> list(HttpServletRequest request) {
+        // 宠物档案是私有数据：ownerId 一律以服务端登录态为准，忽略任何客户端参数
+        String userId = AuthContext.requireUserId(request);
+        if (dubboEnabled) {
             try {
-                return ApiResponse.success(petDubboService.findByOwnerId(ownerId));
+                return ApiResponse.success(petDubboService.findByOwnerId(userId));
             } catch (Exception e) {
                 log.warn("Dubbo findByOwnerId 调用失败，降级本地: {}", e.getMessage());
             }
         }
-        if (ownerId != null && !ownerId.isBlank()) {
-            return ApiResponse.success(petProfileRepository.findByOwnerId(ownerId));
-        }
-        // 无 ownerId 时走 Dubbo findAll，保证与 create/update/delete 操作数据一致
-        if (dubboEnabled) {
-            try {
-                return ApiResponse.success(petDubboService.findAll());
-            } catch (Exception e) {
-                log.warn("Dubbo findAll 调用失败，降级本地: {}", e.getMessage());
-            }
-        }
-        return ApiResponse.success(petProfileRepository.findAll());
+        return ApiResponse.success(petProfileRepository.findByOwnerId(userId));
     }
 
     @GetMapping("/{id}")
-    public ApiResponse<PetProfile> get(@PathVariable String id) {
+    public ApiResponse<PetProfile> get(@PathVariable String id, HttpServletRequest request) {
+        String userId = AuthContext.requireUserId(request);
+        PetProfile pet = null;
         if (dubboEnabled) {
             try {
-                PetProfile pet = petDubboService.findById(id);
-                if (pet != null) return ApiResponse.success(pet);
-                return ApiResponse.error(404, "宠物档案不存在");
+                pet = petDubboService.findById(id);
             } catch (Exception e) {
                 log.warn("Dubbo findById 调用失败，降级本地: {}", e.getMessage());
             }
         }
-        return petProfileRepository.findById(id)
-                .map(ApiResponse::success)
-                .orElse(ApiResponse.error(404, "宠物档案不存在"));
+        if (pet == null) {
+            pet = petProfileRepository.findById(id).orElse(null);
+        }
+        if (pet == null) {
+            return ApiResponse.error(404, "宠物档案不存在");
+        }
+        // 水平越权防护：只能查看自己的宠物
+        if (!userId.equals(pet.getOwnerId())) {
+            throw new AccessDeniedException("无权访问他人宠物档案");
+        }
+        return ApiResponse.success(pet);
     }
 
     @PostMapping

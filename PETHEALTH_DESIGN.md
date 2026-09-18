@@ -14,13 +14,12 @@
 - [5. 核心实体与 DTO 定义](#5-核心实体与-dto-定义)
 - [6. REST API 接口文档](#6-rest-api-接口文档)
 - [7. Dubbo 微服务接口设计](#7-dubbo-微服务接口设计)
-- [8. ~~RabbitMQ 消息队列设计~~（已下线）](#8-rabbitmq-消息队列设计已下线)
-- [9. AI 功能设计](#9-ai-功能设计)
-- [10. 前端页面设计](#10-前端页面设计)
-- [11. 配置文件模板](#11-配置文件模板)
-- [12. 分布式追踪与监控](#12-分布式追踪与监控)
-- [13. 部署指南](#13-部署指南)
-- [14. 开发路线图](#14-开发路线图)
+- [8. AI 功能设计](#8-ai-功能设计)
+- [9. 前端页面设计](#9-前端页面设计)
+- [10. 配置文件模板](#10-配置文件模板)
+- [11. 分布式追踪与监控](#11-分布式追踪与监控)
+- [12. 部署指南](#12-部署指南)
+- [13. 开发路线图](#13-开发路线图)
 
 ---
 
@@ -79,14 +78,12 @@
 | Spring Cloud | Spring Cloud | 2023.0.0 | 微服务基础 |
 | 数据库 | MongoDB | 8.2.0 | 主存储（文档型，灵活 Schema） |
 | 缓存 | Redis | 7.x | 排行榜、会话 Token、统计缓存 |
-| ~~消息队列~~ | ~~RabbitMQ~~ | — | **已下线**：提醒改为定时调度 + 应用内触达，无 MQ 依赖 |
-| ~~分布式追踪~~ | ~~Zipkin + Micrometer~~ | — | **未启用**：本项目未接入链路追踪 |
-| AI 调用 | OkHttp + DeepSeek API | 4.12.0 | AI 健康诊断 |
+| AI 调用 | JDK HttpURLConnection + DeepSeek API | - | AI 健康诊断（无第三方 HTTP 客户端依赖） |
 | JSON | FastJSON2 | 2.0.41 | JSON 处理 |
 | Lombok | Lombok | - | 简化 POJO |
 | 前端 | 原生 HTML + CSS + JS | - | 单页应用 |
 | 图表 | ECharts | 5.4.3 | 健康趋势图 |
-| 图标 | Lucide Icons | - | 前端图标 |
+| 图标 | Lucide Icons | UMD 1.47.0 | 前端图标 |
 | 安全 | Spring Security | 6.x | BCrypt 密码加密 + 认证 |
 | 构建 | Maven | 3.9+ | 多模块构建 |
 
@@ -236,7 +233,7 @@ pethealth/                                          ← 项目根目录
 │       │   │   ├── ServiceUnavailableException.java
 │       │   │   └── UnauthorizedException.java
 │       │   ├── interceptor/
-│       │   │   ├── AuthInterceptor.java             ← Token 解析 + 写接口登录门槛
+│       │   │   ├── AuthInterceptor.java             ← Token 解析 + 写接口/私有读接口登录门槛
 │       │   │   └── AuthContext.java
 │       │   ├── repository/
 │       │   │   ├── UserRepository.java
@@ -260,7 +257,7 @@ pethealth/                                          ← 项目根目录
 │       │   │   ├── NutritionService.java
 │       │   │   ├── ReminderScheduler.java           ← findAndModify 原子抢占
 │       │   │   ├── ReminderService.java
-│       │   │   ├── OwnershipGuard.java
+│       │   │   ├── OwnershipGuard.java           ← 水平越权防护：requireOwnedPet 统一属主校验（403/404）
 │       │   │   └── RateLimitService.java
 │       │   └── PetHealthWebApplication.java
 │       └── resources/
@@ -268,7 +265,10 @@ pethealth/                                          ← 项目根目录
 │           └── static/
 │               ├── index.html
 │               ├── script.js
-│               └── styles.css
+│               ├── styles.css
+│               └── lib/                                ← 前端第三方库本地化（不走 CDN）
+│                   ├── echarts.min.js                   ← ECharts 5.4.3
+│                   └── lucide.min.js                   ← Lucide UMD 1.47.0
 │
 ├── pethealth-api/                                      ← 共享 API 模块（Dubbo 接口 + 公共实体）
 │   ├── pom.xml
@@ -372,7 +372,7 @@ pethealth/                                          ← 项目根目录
 
 > 说明：营养助手**不新增集合**，直接聚合读取 `pet_profiles`（绝育等档案字段）与 `health_records`（体重序列）计算。
 
-### 4.2 pet_profiles — 宠物档案（核心！体现 MongoDB 灵活 Schema）
+### 4.2 pet_profiles — 宠物档案（核心）
 
 ```json
 {
@@ -531,7 +531,7 @@ pethealth/                                          ← 项目根目录
 - `{ status: 1 }`（值为 `published`）
 - `{ tags: 1 }`（多键索引）
 
-### 4.6 replies — 帖子回复（扁平结构，简单版本）
+### 4.6 replies — 帖子回复
 
 ```json
 {
@@ -603,7 +603,7 @@ pethealth/                                          ← 项目根目录
 }
 ```
 
-### 4.10 营养助手计算（无新增集合）
+### 4.10 营养助手计算
 
 营养助手不存储业务数据，运行时由 pethealth-web **本地聚合**读取 `pet_profiles`（物种 / 生日 / 绝育）与 `health_records`（最新体重 + 体重序列），按通用营养标准实时计算（参考 NRC 2006 / WSAVA）：
 
@@ -882,7 +882,7 @@ public class ApiResponse<T> {
 
 ---
 
-## 5.5 辅助服务与配置类完整代码（可直接复制粘贴）
+## 5.5 辅助服务与配置类完整代码
 
 > 本节补全所有零散提到但没有给出完整代码的类。每个类都标注了**文件位置**和**所属模块**。
 
@@ -890,7 +890,7 @@ public class ApiResponse<T> {
 
 **文件位置**: `pethealth-web/src/main/java/com/pethealth/config/SecurityConfig.java`
 
-> **实际认证机制**：Spring Security 仅提供 `BCryptPasswordEncoder` 并放开所有接口（`permitAll`），**真正的登录态校验由 `AuthInterceptor` 完成**——解析 HttpOnly Cookie / `Authorization: Bearer` 中的 Token，查 Redis 取 userId，写接口（POST/PUT/DELETE）无有效 Token 返回 401。Token 写 Redis 失败时抛 `ServiceUnavailableException` → 503。
+> **实际认证机制**：Spring Security 仅提供 `BCryptPasswordEncoder` 并放开所有接口（`permitAll`），**真正的登录态校验由 `AuthInterceptor` 完成**——解析 HttpOnly Cookie / `Authorization: Bearer` 中的 Token，查 Redis 取 userId。**写接口（POST/PUT/DELETE）一律强制登录；读接口（GET）中，社区类公开数据匿名可访问，私有数据（宠物 / 健康记录 / 营养 / AI / 提醒 / 通知）也强制登录**，无有效 Token 返回 401。属主一致性由 `OwnershipGuard` 统一拦截（403）。Token 写 Redis 失败时抛 `ServiceUnavailableException` → 503。
 
 ```java
 package com.pethealth.config;
@@ -1183,7 +1183,7 @@ public class DataInitializer implements CommandLineRunner {
 }
 ```
 
-### 5.5.5 PostRankService（Redis Sorted Set 热门榜 — 完整实现）
+### 5.5.5 PostRankService（Redis Sorted Set 热门榜）
 
 **文件位置**: `pethealth-web/src/main/java/com/pethealth/service/PostRankService.java`
 
@@ -1317,139 +1317,8 @@ public class PostRankService {
 
 > 记得在 `PetHealthApplication` 主类上加 `@EnableScheduling`，否则 `@Scheduled` 定时任务不会生效！
 
-### 5.5.6 EmailNotifyService（邮件推送 — SMTP 实现）
 
-> **当前项目状态：邮件推送已下线。** 提醒改为**应用内触达**（提醒中心状态流转），`notifyMethod` 固定为 `INAPP`，不配置 SMTP。以下为历史实现 / 可选扩展参考，生产无需复制。
-
-**文件位置（历史）**: `reminder-service/src/main/java/com/pethealth/service/EmailNotifyService.java`
-
-```java
-package com.pethealth.service;
-
-import com.pethealth.entity.Reminder;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Service;
-
-import jakarta.mail.*;
-import jakarta.mail.internet.*;
-import java.util.Properties;
-
-/**
- * 邮件通知服务
- * 使用 JavaMailSender 发送提醒邮件
- * 配置示例见 11.4 节 reminder-service 的 application.yml
- *
- * 发件箱推荐：
- * - QQ 邮箱: smtp.qq.com:465（SSL），需要在 QQ 邮箱设置里开启 SMTP 并获取授权码
- * - 163 邮箱: smtp.163.com:465
- */
-@Slf4j
-@Service
-public class EmailNotifyService {
-
-    @Value("${mail.smtp-host:smtp.example.com}")
-    private String smtpHost;
-
-    @Value("${mail.smtp-port:465}")
-    private String smtpPort;
-
-    @Value("${mail.smtp-user:}")
-    private String smtpUser;
-
-    @Value("${mail.smtp-password:}")
-    private String smtpPassword;
-
-    @Value("${mail.from:pethealth@example.com}")
-    private String fromAddress;
-
-    /**
-     * 发送提醒邮件
-     */
-    public void send(Reminder reminder) {
-        if (smtpUser == null || smtpUser.isEmpty()) {
-            log.warn("SMTP 未配置，跳过邮件发送（提醒标题: {}）", reminder.getTitle());
-            return;
-        }
-
-        try {
-            Properties props = new Properties();
-            props.put("mail.smtp.host", smtpHost);
-            props.put("mail.smtp.port", smtpPort);
-            props.put("mail.smtp.auth", "true");
-            props.put("mail.smtp.ssl.enable", "true");
-
-            Session session = Session.getInstance(props, new Authenticator() {
-                @Override
-                protected PasswordAuthentication getPasswordAuthentication() {
-                    return new PasswordAuthentication(smtpUser, smtpPassword);
-                }
-            });
-
-            Message message = new MimeMessage(session);
-            message.setFrom(new InternetAddress(fromAddress));
-            message.setRecipients(Message.RecipientType.TO,
-                    InternetAddress.parse(reminder.getEmail()));
-            message.setSubject("🐾 PetHealth 提醒：" + reminder.getTitle());
-            message.setText(buildEmailBody(reminder), "UTF-8");
-            message.saveChanges();
-
-            Transport.send(message);
-            log.info("提醒邮件发送成功 -> {}", reminder.getEmail());
-        } catch (MessagingException e) {
-            log.error("邮件发送失败", e);
-        }
-    }
-
-    /**
-     * 发送提醒邮件（直接传入收件人和模板文本）
-     */
-    public void send(String toEmail, String subject, String plainBody) {
-        try {
-            Properties props = new Properties();
-            props.put("mail.smtp.host", smtpHost);
-            props.put("mail.smtp.port", smtpPort);
-            props.put("mail.smtp.auth", "true");
-            props.put("mail.smtp.ssl.enable", "true");
-
-            Session session = Session.getInstance(props, new Authenticator() {
-                @Override
-                protected PasswordAuthentication getPasswordAuthentication() {
-                    return new PasswordAuthentication(smtpUser, smtpPassword);
-                }
-            });
-
-            Message message = new MimeMessage(session);
-            message.setFrom(new InternetAddress(fromAddress));
-            message.setRecipients(Message.RecipientType.TO, InternetAddress.parse(toEmail));
-            message.setSubject(subject);
-            message.setText(plainBody, "UTF-8");
-            message.saveChanges();
-            Transport.send(message);
-        } catch (MessagingException e) {
-            log.error("邮件发送失败", e);
-        }
-    }
-
-    private String buildEmailBody(Reminder reminder) {
-        return String.format(
-                "亲爱的铲屎官：\n\n" +
-                "您的宠物【%s】有一条健康提醒：\n\n" +
-                "📌 %s\n" +
-                "📝 %s\n" +
-                "⏰ 提醒时间：%s\n\n" +
-                "建议尽快处理哦！\n\n" +
-                "—— PetHealth 宠物健康管家",
-                reminder.getPetName(),
-                reminder.getTitle(),
-                reminder.getDescription() != null ? reminder.getDescription() : "",
-                reminder.getRemindAt()
-        );
-    }
-}
-```
-
-### 5.5.7 ReminderScheduler（定时扫描 + 原子抢占到期提醒）
+### 5.5.6 ReminderScheduler（定时扫描 + 原子抢占到期提醒）
 
 **文件位置**: `pethealth-web/src/main/java/com/pethealth/service/ReminderScheduler.java`
 
@@ -1516,130 +1385,20 @@ public class ReminderScheduler {
 }
 ```
 
-> 已移除 `EmailNotifyService` 与 RabbitMQ 延迟消息：提醒统一走应用内状态流转（PENDING → SENT → ACKNOWLEDGED / CANCELLED）。记得 `pethealth-web` 主启动类加 `@EnableScheduling`。
-
-### 5.5.8 DelayMessageProducer / DelayMessageConsumer（已移除）
-
-> **RabbitMQ 延迟消息方案已下线**：项目不再依赖 `spring-boot-starter-amqp`，提醒改为 `ReminderScheduler` 定时扫描 + `findAndModify` 原子抢占。以下代码仅作历史参考，**当前代码库中不存在这两个类**，也无需在 pom.xml 引入 AMQP 依赖。
-
-**文件位置**: `reminder-service/src/main/java/com/pethealth/service/DelayMessageProducer.java`
-
-```java
-package com.pethealth.service;
-
-import com.pethealth.config.RabbitMQConfig;
-import com.pethealth.entity.Reminder;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.amqp.rabbit.core.RabbitTemplate;
-import org.springframework.stereotype.Service;
-
-import java.time.LocalDateTime;
-import java.time.temporal.ChronoUnit;
-
-/**
- * 延迟消息生产者
- * 把 Reminder 封装成带 delay 的消息投递到"延迟队列"
- * 消息到达延迟时间后会自动转到"真正消费的队列"
- *
- * 原理参考第 8.2 节：TTL + Dead Letter Exchange
- */
-@Slf4j
-@Service
-@RequiredArgsConstructor
-public class DelayMessageProducer {
-
-    private final RabbitTemplate rabbitTemplate;
-    private final ObjectMapper objectMapper;
-
-    /**
-     * 发送一条延迟提醒消息
-     * @param reminder 完整的提醒实体（会序列化成 JSON）
-     */
-    public void sendDelayedReminder(Reminder reminder) {
-        long delayMs = ChronoUnit.MILLIS.between(LocalDateTime.now(), reminder.getRemindAt());
-        delayMs = Math.max(60_000L, delayMs); // 最小延迟 1 分钟，防止负数
-
-        try {
-            String json = objectMapper.writeValueAsString(reminder);
-
-            rabbitTemplate.convertAndSend(
-                    RabbitMQConfig.DELAY_EXCHANGE,
-                    RabbitMQConfig.DELAY_ROUTING,
-                    json,
-                    msg -> {
-                        msg.getMessageProperties().setDelay((int) delayMs);
-                        return msg;
-                    }
-            );
-            log.info("发送延迟提醒，id={}, 延迟 {} 分钟后触发", reminder.getId(), delayMs / 60000);
-        } catch (JsonProcessingException e) {
-            log.error("序列化 Reminder 失败", e);
-        }
-    }
-}
-```
-
-**文件位置**: `reminder-service/src/main/java/com/pethealth/service/DelayMessageConsumer.java`
-
-```java
-package com.pethealth.service;
-
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.pethealth.config.RabbitMQConfig;
-import com.pethealth.entity.Reminder;
-import com.pethealth.repository.ReminderRepository;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.amqp.rabbit.annotation.RabbitListener;
-import org.springframework.stereotype.Service;
-
-/**
- * 延迟消息消费者
- * 监听真正的提醒队列（死信队列），收到消息后发送邮件 + 更新状态
- *
- * 注意：这个队列是 TTL 到期后的消息自动转发过来的
- */
-@Slf4j
-@Service
-@RequiredArgsConstructor
-public class DelayMessageConsumer {
-
-    private final ObjectMapper objectMapper;
-    private final ReminderRepository reminderRepository;
-    private final EmailNotifyService emailNotifyService;
-
-    @RabbitListener(queues = RabbitMQConfig.REMINDER_QUEUE)
-    public void onReminder(String payload) {
-        try {
-            Reminder reminder = objectMapper.readValue(payload, Reminder.class);
-            log.info("收到到期提醒，id={}, title={}", reminder.getId(), reminder.getTitle());
-
-            // 1. 发送邮件
-            emailNotifyService.send(reminder);
-
-            // 2. 更新状态
-            reminder.setStatus("SENT");
-            reminderRepository.save(reminder);
-        } catch (Exception e) {
-            log.error("处理提醒消息失败", e);
-        }
-    }
-}
-```
-
-> **Repository 补充**：上面代码用到了 `ReminderRepository.findPendingBefore(LocalDateTime)`，需要在 ReminderRepository 里加：
-> ```java
-> List<Reminder> findByStatusAndRemindAtBefore(String status, LocalDateTime time);
-> ```
-
 ---
 
 ## 6. REST API 接口文档
 
 > 所有接口统一返回 `ApiResponse<T>` 格式，默认响应码 200 表示成功。端口 8080。
+
+> **数据可见性与水平越权防护（IDOR）**：
+> - **公开数据**：社区帖子 / 回复 / 点赞 / 首页聚合统计——读接口无需登录，未登录可浏览；
+> - **私有数据**：宠物档案、健康记录、营养报告、AI 诊断与报告、提醒、站内通知——**读接口同样必须登录**，
+>   且资源属主必须等于当前登录用户。"是谁的"一律由服务端登录态（Token → userId）决定，
+>   **请求参数中的 `ownerId` 一律不可信**（接口忽略或仅作占位）；
+> - 所有以 `petId` 为入口的访问先经 `OwnershipGuard.requireOwnedPet()`：宠物不存在 → 404，
+>   已登录但非属主 → 403，未登录 → 401；
+> - 写操作（POST/PUT/DELETE）还会校验关联宠物归属，禁止把记录/提醒挂到他人宠物下。
 
 ### 6.1 用户模块
 
@@ -1653,7 +1412,7 @@ public class DelayMessageConsumer {
 | PUT  | `/api/users/{id}` | 更新用户资料（仅本人） |
 | POST | `/api/users/avatar` | 上传头像（multipart/form-data，字段 `file`） |
 
-> **认证机制**：Token 存 Redis（`pethealth:auth:token:{token}` Hash，TTL 7 天），通过 HttpOnly Cookie `PETHEALTH_TOKEN` 下发；写接口（POST/PUT/DELETE）必须携带有效 Token，否则 401；Redis 写 Token 失败返回 503。
+> **认证机制**：Token 存 Redis（`pethealth:auth:token:{token}` Hash，TTL 7 天），通过 HttpOnly Cookie `PETHEALTH_TOKEN` 下发；写接口（POST/PUT/DELETE）必须携带有效 Token，否则 401；**私有数据的 GET 接口（宠物/健康记录/营养/AI/提醒/通知）同样强制登录**，仅社区类 GET 允许匿名访问；Redis 写 Token 失败返回 503。
 
 **注册请求体：**
 ```json
@@ -1664,13 +1423,14 @@ public class DelayMessageConsumer {
 
 | Method | Path | 说明 |
 |--------|------|------|
-| POST | `/api/pets` | 创建宠物档案 |
-| GET  | `/api/pets` | 查询当前用户所有宠物 |
-| GET  | `/api/pets/{id}` | 查询单只宠物详情 |
-| PUT  | `/api/pets/{id}` | 更新宠物基本信息（含嵌套的疫苗/驱虫/体检/就医数组） |
-| DELETE | `/api/pets/{id}` | 删除宠物（物理删除，并清理其统计缓存） |
+| POST | `/api/pets` | 创建宠物档案（ownerId 取登录态） |
+| GET  | `/api/pets` | **仅返回当前登录用户的宠物**（必须登录，不接受 ownerId 参数，无全量返回） |
+| GET  | `/api/pets/{id}` | 查询单只宠物详情（仅属主） |
+| PUT  | `/api/pets/{id}` | 更新宠物基本信息（仅属主；含嵌套的疫苗/驱虫/体检/就医数组） |
+| DELETE | `/api/pets/{id}` | 删除宠物（仅属主，物理删除，并清理其统计缓存） |
 
 > 疫苗 / 驱虫 / 体检 / 就医记录作为 `PetProfile` 的嵌套数组，通过 `PUT /api/pets/{id}` 整体更新，无独立子路由。
+> Dubbo 与本地两条查询路径都做了属主收口，不存在"未带 ownerId 时 findAll 全量返回"的分支。
 
 **创建宠物请求体：**
 ```json
@@ -1689,13 +1449,13 @@ public class DelayMessageConsumer {
 
 | Method | Path | 说明 |
 |--------|------|------|
-| POST | `/api/health-records` | 新增健康记录 |
-| GET  | `/api/health-records/pet/{petId}` | 查询某宠物的所有记录 |
-| GET  | `/api/health-records` | 按 ownerId 查询（可选） |
-| GET  | `/api/health-records/{id}` | 查询单条记录 |
-| GET  | `/api/health-records/pet/{petId}/trends?period=weekly\|monthly` | 周/月聚合统计（Redis 缓存，键带周期起点） |
-| PUT  | `/api/health-records/{id}` | 更新记录（换宠物时旧/新 petId 缓存双失效） |
-| DELETE | `/api/health-records/{id}` | 删除记录 |
+| POST | `/api/health-records` | 新增健康记录（ownerId 取登录态；petId 必须是本人宠物） |
+| GET  | `/api/health-records/pet/{petId}` | 查询某宠物的所有记录（**仅该宠物属主**） |
+| GET  | `/api/health-records?page=&size=` | 分页查询**当前登录用户**的全部记录（不接受 ownerId 参数） |
+| GET  | `/api/health-records/{id}` | 查询单条记录（**仅记录属主**） |
+| GET  | `/api/health-records/pet/{petId}/trends?period=weekly\|monthly` | 周/月聚合统计（**仅该宠物属主**；Redis 缓存，键带周期起点） |
+| PUT  | `/api/health-records/{id}` | 更新记录（仅记录属主；换挂的新宠物也必须本人，旧/新 petId 缓存双失效） |
+| DELETE | `/api/health-records/{id}` | 删除记录（仅记录属主） |
 
 **新增健康记录请求体：**
 ```json
@@ -1711,8 +1471,8 @@ public class DelayMessageConsumer {
 
 | Method | Path | 说明 |
 |--------|------|------|
-| POST | `/api/ai-diagnosis` | 症状描述 → AI 初步诊断（Dubbo 调 health-record-service） |
-| GET  | `/api/ai-diagnosis/report?ownerId=&petId=&period=WEEKLY\|MONTHLY` | AI 生成健康周报/月报（本地健康记录聚合，不调用 LLM、不需要 Key） |
+| POST | `/api/ai-diagnosis` | 症状描述 → AI 初步诊断（Dubbo 调 health-record-service）。**必须登录**；携带 petId 时该宠物须为本人，否则 403；不选宠物（通用咨询）则不校验 |
+| GET  | `/api/ai-diagnosis/report?petId=&period=WEEKLY\|MONTHLY` | AI 生成健康周报/月报（本地健康记录聚合，不调用 LLM、不需要 Key）。**必须登录且为该宠物属主**；ownerId 不取请求参数，由登录态注入 |
 
 > **LLM API Key 传递方式**：仓库与服务端均不内置真实 Key。用户在前端"设置 API Key"弹窗中输入，
 > 浏览器存于 `localStorage`（键 `pethealth:llm-api-key`），每次诊断通过**可选请求头**
@@ -1799,13 +1559,13 @@ LLM 调用失败（网络/超时/鉴权错误）时自动回退规则引擎，�
 
 | Method | Path | 说明 |
 |--------|------|------|
-| GET  | `/api/reminders?ownerId=` | 我的所有提醒（前端按进行中 / 已完成分组） |
-| GET  | `/api/reminders/due?days=7` | 即将到期（未来 N 天内）的提醒 |
-| POST | `/api/reminders` | 创建提醒（应用内触达，notifyMethod 固定 `INAPP`） |
-| PUT  | `/api/reminders/{id}` | 编辑提醒（仅 PENDING 可编辑） |
-| PUT  | `/api/reminders/{id}/acknowledge` | 确认完成提醒（状态 → ACKNOWLEDGED） |
-| PUT  | `/api/reminders/{id}/cancel` | 取消提醒 |
-| DELETE | `/api/reminders/{id}` | 删除提醒 |
+| GET  | `/api/reminders` | 我的所有提醒（必须登录；**忽略 ownerId 参数，强制按登录态过滤**；支持 `?petId=`，需为该宠物属主） |
+| GET  | `/api/reminders/due?days=7` | **当前用户**即将到期（未来 N 天内）的提醒（按 owner 过滤，多用户不串号；不走无属主过滤的 Dubbo 路径） |
+| POST | `/api/reminders` | 创建提醒（ownerId 取登录态；关联 petId 必须为本人宠物；应用内触达，notifyMethod 固定 `INAPP`） |
+| PUT  | `/api/reminders/{id}` | 编辑提醒（仅 PENDING 可编辑，仅属主；改关联宠物时新宠物也须本人） |
+| PUT  | `/api/reminders/{id}/acknowledge` | 确认完成提醒（仅属主，状态 → ACKNOWLEDGED） |
+| PUT  | `/api/reminders/{id}/cancel` | 取消提醒（仅属主） |
+| DELETE | `/api/reminders/{id}` | 删除提醒（仅属主） |
 
 > 提醒一律在**应用内**触达（提醒中心状态流转），项目内无邮件 / 短信通道，无 RabbitMQ。到期由 `ReminderScheduler` 用 `findAndModify` 原子抢占翻转 PENDING→SENT。
 
@@ -1813,8 +1573,8 @@ LLM 调用失败（网络/超时/鉴权错误）时自动回退规则引擎，�
 
 | Method | Path | 说明 |
 |--------|------|------|
-| GET | `/api/nutrition/{petId}` | 聚合报告：宠物信息 + 最新体重 + RER/MER 计算 + 体重趋势（最近 30 条） |
-| GET | `/api/nutrition/{petId}?bcs=7` | 同上，并返回 BCS 体况调整后的目标热量 |
+| GET | `/api/nutrition/{petId}` | 聚合报告：宠物信息 + 最新体重 + RER/MER 计算 + 体重趋势（最近 30 条）。**必须登录且为该宠物属主** |
+| GET | `/api/nutrition/{petId}?bcs=7` | 同上，并返回 BCS 体况调整后的目标热量（同样需属主） |
 
 > 计算规则见 4.10 节；由 pethealth-web **本地聚合** pet_profiles + health_records 实现（非 Dubbo 接口）。
 
@@ -1829,11 +1589,11 @@ LLM 调用失败（网络/超时/鉴权错误）时自动回退规则引擎，�
 
 | Method | Path | 说明 |
 |--------|------|------|
-| GET  | `/api/notifications` | 我的通知列表 |
-| GET  | `/api/notifications/unread-count` | 未读通知数 |
-| PUT  | `/api/notifications/{id}/read` | 标记单条已读 |
-| PUT  | `/api/notifications/read-all` | 全部标记已读 |
-| DELETE | `/api/notifications/{id}` | 删除通知 |
+| GET  | `/api/notifications` | 我的通知列表（必须登录，按登录态取本人，**不接受 ownerId 参数**） |
+| GET  | `/api/notifications/unread-count` | 我的未读通知数（同上） |
+| PUT  | `/api/notifications/{id}/read` | 标记单条已读（仅接收者本人） |
+| PUT  | `/api/notifications/read-all` | 全部标记已读（仅本人，无 ownerId 参数） |
+| DELETE | `/api/notifications/{id}` | 删除通知（仅接收者本人） |
 
 ---
 
@@ -1841,7 +1601,7 @@ LLM 调用失败（网络/超时/鉴权错误）时自动回退规则引擎，�
 
 > Dubbo 接口定义在 Consumer 侧（pethealth-web），Provider 侧实现。Provider 接口包名统一为 `com.pethealth.service.dubbo`。
 
-### 7.0 Dubbo 接口的"共享模块"模式（重要！）
+### 7.0 Dubbo 接口的"共享模块"模式（重要）
 
 Dubbo 接口统一放在**共享模块 `pethealth-api`** 中，Consumer（pethealth-web）和各 Provider 都依赖该模块，**无需两边各复制一份接口**：
 
@@ -1985,102 +1745,9 @@ public interface ReminderDubboService {
 
 ---
 
-## 8. ~~RabbitMQ 消息队列设计~~（已下线）
+## 8. AI 功能设计
 
-> **本项目已移除 RabbitMQ 依赖**：`pom.xml` 不再引入 `spring-boot-starter-amqp`，提醒系统改为 `ReminderScheduler` 定时扫描 + `findAndModify` 原子抢占（详见 5.5.7 节）。以下交换机/队列规划与代码仅作历史方案参考，**当前代码库中不存在 `RabbitMQConfig` / `DelayMessageProducer` / `DelayMessageConsumer`**。
-
-### 8.1 交换机 / 队列规划（历史方案）
-
-| 交换机类型 | Exchange | Queue | Routing Key | 用途 |
-|------------|----------|-------|-------------|------|
-| Direct | `pethealth.reminder.exchange` | `pethealth.reminder.queue` | `reminder.send` | 普通提醒消息 |
-| Direct | `pethealth.reminder.delay.exchange` | `pethealth.reminder.delay.queue` | `reminder.delay` | **延迟消息**（到期提醒） |
-| Topic | `pethealth.health.exchange` | `pethealth.health.suggestion.queue` | `health.suggestion.#` | AI 健康报告异步生成 |
-| Direct | `pethealth.post.exchange` | `pethealth.post.rank.queue` | `post.rank.update` | 热门榜异步刷新 |
-
-### 8.2 延迟消息实现（RabbitMQ 原生 TTL + Dead Letter）
-
-RabbitMQ 原生不支持延迟队列，用 **TTL 队列 + 死信交换机** 实现：
-
-```java
-@Configuration
-public class RabbitMQConfig {
-
-    // ========== 延迟提醒 ==========
-
-    public static final String DELAY_EXCHANGE = "pethealth.reminder.delay.exchange";
-    public static final String DELAY_QUEUE     = "pethealth.reminder.delay.queue";
-    public static final String DELAY_ROUTING  = "reminder.delay";
-
-    // 真正消费的队列（死信队列）
-    public static final String REMINDER_EXCHANGE = "pethealth.reminder.exchange";
-    public static final String REMINDER_QUEUE    = "pethealth.reminder.queue";
-    public static final String REMINDER_ROUTING  = "reminder.send";
-
-    /** 延迟队列：消息过期后进入死信交换机 → 真正的提醒队列 */
-    @Bean
-    public Queue delayQueue() {
-        return QueueBuilder.durable(DELAY_QUEUE)
-                .withArgument("x-dead-letter-exchange", REMINDER_EXCHANGE)
-                .withArgument("x-dead-letter-routing-key", REMINDER_ROUTING)
-                .build();
-    }
-
-    @Bean public DirectExchange delayExchange() {
-        return ExchangeBuilder.directExchange(DELAY_EXCHANGE).durable(true).build();
-    }
-
-    @Bean public Binding delayBinding() {
-        return BindingBuilder.bind(delayQueue()).to(delayExchange()).with(DELAY_ROUTING);
-    }
-
-    /** 真正消费的提醒队列 */
-    @Bean public Queue reminderQueue() { return QueueBuilder.durable(REMINDER_QUEUE).build(); }
-    @Bean public DirectExchange reminderExchange() {
-        return ExchangeBuilder.directExchange(REMINDER_EXCHANGE).durable(true).build();
-    }
-    @Bean public Binding reminderBinding() {
-        return BindingBuilder.bind(reminderQueue()).to(reminderExchange()).with(REMINDER_ROUTING);
-    }
-}
-```
-
-### 8.3 发送延迟消息（ReminderService 示例）
-
-```java
-public void scheduleVaccineReminder(Reminder reminder) {
-    long delayMs = ChronoUnit.MILLIS.between(LocalDateTime.now(), reminder.getRemindAt());
-    // 最小 1 分钟
-    delayMs = Math.max(60_000L, delayMs);
-
-    rabbitTemplate.convertAndSend(
-            RabbitMQConfig.DELAY_EXCHANGE,
-            RabbitMQConfig.DELAY_ROUTING,
-            reminder,
-            msg -> { msg.getMessageProperties().setDelay((int) delayMs); return msg; }
-    );
-    reminderRepository.save(reminder);
-}
-```
-
-### 8.4 消费提醒 → 发送邮件
-
-```java
-@RabbitListener(queues = RabbitMQConfig.REMINDER_QUEUE)
-public void onReminder(String payload) {
-    Reminder reminder = objectMapper.readValue(payload, Reminder.class);
-    emailNotifyService.send(reminder);
-    reminder.setStatus("SENT");
-    reminderRepository.save(reminder);
-    log.info("提醒已发送: {}", reminder.getTitle());
-}
-```
-
----
-
-## 9. AI 功能设计
-
-### 9.1 技术选型
+### 8.1 技术选型
 
 - **LLM**: DeepSeek API（便宜且效果好，适合 AI 健康诊断场景）
 - **HTTP 客户端**: 实际调用使用 JDK 原生 `HttpURLConnection`（`AIDiagnosisDubboServiceImpl#callLLM`，fastjson2 序列化请求体）；pom 中同时声明了 OkHttp 依赖
@@ -2088,7 +1755,7 @@ public void onReminder(String payload) {
 - **模型**: `deepseek-v4-flash`（或 `deepseek-chat`）
 - **输出约束**: Prompt 硬性要求纯文本（禁止 `# * ** -` 等 Markdown 语法），前端 `stripMarkdown()` 再做一次兜底剥离
 
-### 9.1.1 API Key 安全方案（仓库零密钥）
+### 8.1.1 API Key 安全方案（仓库零密钥）
 
 为保证项目上传 GitHub 不泄露 Key，同时 AI 模块在本地/演示环境可用，采用"**浏览器持有、按请求透传、服务端不落盘**"方案：
 
@@ -2114,13 +1781,13 @@ DeepSeek API（Authorization: Bearer <effectiveKey>）
 - 环境变量 `LLM_API_KEY` 保留为真实部署的服务端兜底，优先级低于用户请求级 Key；
 - 局限：Key 存于使用者本机浏览器，适合本地/教学/演示；多用户公网部署应改为服务端账号体系。
 
-### 9.2 LLMClient 完整实现代码（可直接复制粘贴）
+### 8.2 LLMClient 完整实现代码
 
 > ⚠️ **本节为早期设计稿，与当前真实实现有出入**。实际代码中不存在独立的 `LLMClient` 类，
 > LLM 调用、Prompt 构造、规则引擎兜底均内聚在
 > `health-record-service/.../service/dubbo/AIDiagnosisDubboServiceImpl.java`
 > （`diagnose` / `callLLM` / `buildPrompt` / `ruleBasedDiagnose`），且：
-> HTTP 客户端用 `HttpURLConnection` 而非 OkHttp；Key 支持请求级注入（见 9.1.1）；
+> HTTP 客户端用 `HttpURLConnection` 而非 OkHttp；Key 支持请求级注入（见 8.1.1）；
 > 读超时为 60s；Prompt 要求纯文本输出。以下代码仅保留作设计参考。
 
 **文件位置**: `health-record-service/src/main/java/com/pethealth/service/LLMClient.java`
@@ -2362,7 +2029,7 @@ public class LLMClient {
 }
 ```
 
-### 9.3 Prompt 安全设计
+### 8.3 Prompt 安全设计
 
 ```
 1. 输入校验：species 白名单 (DOG/CAT/RABBIT/HAMSTER/BIRD/OTHER)
@@ -2374,7 +2041,7 @@ public class LLMClient {
 7. 失败降级：返回预设模板 + 建议"请尽快就医"
 ```
 
-### 9.4 AI 调用链路
+### 8.4 AI 调用链路
 
 ```
 前端 POST /api/ai-diagnosis（请求头 X-LLM-Api-Key，Key 存 localStorage）
@@ -2398,9 +2065,9 @@ DeepSeek API (api.deepseek.com/v1/chat/completions)
 
 ---
 
-## 10. 前端页面设计
+## 9. 前端页面设计
 
-### 10.1 页面列表（完整对应导航栏）
+### 9.1 页面列表（完整对应导航栏）
 
 | 导航 | 页面 | 核心内容 |
 |------|------|----------|
@@ -2413,40 +2080,40 @@ DeepSeek API (api.deepseek.com/v1/chat/completions)
 | 提醒中心 | Reminder | 所有提醒列表 + 创建自定义提醒 + 疫苗/驱虫到期自动提醒 |
 | 统计 | Statistics | 个人 Dashboard（宠物数、本周打卡、健康数据趋势） |
 
-### 10.2 UI 风格
+### 9.2 UI 风格
 
 - **主色调**：深海军蓝 `#3873B6`（主色）+ 天蓝 `#6DA1D8`（强调/链接），页面浅灰底 `#F5F7FA`；状态徽章用统一的浅色系（浅黄/浅绿/浅蓝/浅红/浅灰），详见 styles.css 顶部 CSS 变量
-- **卡片风格**：圆角 12px + 浅阴影 + 悬停微动画，配合 `card-glow` / `card-shine` 风格类使用（完整 CSS 见 10.7 节）
-- **图标**：Lucide Icons，CDN 引入，`data-lucide="paw-print"` / `heart-pulse` / `thermometer` / `calendar-bell` 等
+- **卡片风格**：圆角 12px + 浅阴影 + 悬停微动画，配合 `card-glow` / `card-shine` 风格类使用（完整 CSS 见 9.7 节）
+- **图标**：Lucide Icons，`data-lucide="paw-print"` / `heart-pulse` / `thermometer` / `calendar-bell` 等
 - **图表库**：ECharts 5.4.3
 - **字体**：系统默认 + 中文友好
 
-### 10.3 关键页面 Mockup 描述
+### 9.3 关键页面 Mockup 描述
 
 #### 首页（Dashboard）
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  🐾 PetHealth · 宠物健康管家      首页 | 档案 | 记录 | AI | 社区 | 营养 | 提醒  [登录/注册] │
+│  PetHealth · 宠物健康管家      首页 | 档案 | 记录 | AI | 社区 | 营养 | 提醒  [登录/注册] │
 ├─────────────────────────────────────────────────────────┤
 │                                                         │
-│  👋 欢迎回来，小明！                                     │
+│  欢迎回来，小明！                                     │
 │                                                         │
 │  ┌───────┐ ┌───────┐ ┌───────┐ ┌───────┐               │
-│  │ 🐕 豆豆 │ │ 🐈 咪咪 │ │ 🐰 白白 │ │ + 添加 │               │
+│  │ 🐕 豆豆 │ │ 🐈 咪咪 │ │ 🐰 白白 │ │ + 添加 │         │
 │  │ 柯基  │ │ 英短  │ │ 垂耳兔│ │ 新宠物 │               │
 │  │ 11.5kg│ │ 4.2kg │ │ 2.1kg│ │       │               │
 │  └───────┘ └───────┘ └───────┘ └───────┘               │
 │                                                         │
 │  ┌─────────────────┐  ┌─────────────────────┐          │
-│  │ 📊 统计数据      │  │ 🔥 热门社区帖子      │          │
+│  │    统计数据      │  │    热门社区帖子      │          │
 │  │ 帖子总数    1,234│  │ 1. 我家猫突然不吃东西  │          │
 │  │ 宠物档案       26│  │ 2. 柯基掉毛严重怎么办  │          │
 │  │ 健康记录    8,567│  │ 3. 新手养猫必看清单    │          │
 │  │ 活跃用户     3,456│  │ ...                 │          │
 │  └─────────────────┘  └─────────────────────┘          │
 │                                                         │
-│  ⏰ 即将到期提醒                                         │
+│   即将到期提醒                                          │
 │  ┌─────────────────────────────────────────────────────┐│
 │  │ 🔔 豆豆的狂犬疫苗  还有 3 天到期  [标记已处理]       ││
 │  │ 🔔 咪咪的驱虫      还有 12 天到期  [标记已处理]       ││
@@ -2479,7 +2146,7 @@ DeepSeek API (api.deepseek.com/v1/chat/completions)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  🤖 AI 健康助手                                              │
+│  AI 健康助手                                                │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
 │  选择宠物: [豆豆 ▼] 柯基 · 2岁 · 公 · 11.5kg                 │
@@ -2490,7 +2157,7 @@ DeepSeek API (api.deepseek.com/v1/chat/completions)
 │  │                                                          ││
 │  │                                                          ││
 │  └─────────────────────────────────────────────────────────┘│
-│  持续时间: [1天 ▼]   [🔍 开始 AI 诊断]                       │
+│  持续时间: [1天 ▼]   [   开始 AI 诊断]                       │
 │  DeepSeek Key：sk-****f00a        [⚙ 设置 API Key]           │
 │  （Key 仅存本浏览器；未配置时弹窗引导，可跳过走内置规则）         │
 │                                                             │
@@ -2498,7 +2165,7 @@ DeepSeek API (api.deepseek.com/v1/chat/completions)
 │                                                             │
 │  📋 AI 诊断结果（仅供参考，不能替代兽医诊断）                   │
 │                                                             │
-│  ⚠️ 可能原因：                                                │
+│  可能原因：                                                  │
 │  ├─ 🔸 天气炎热导致食欲下降          概率：中                  │
 │  │  夏季高温环境下，狗狗食欲减退较常见...                       │
 │  ├─ 🔸 毛球症（柯基也会舔毛）         概率：中高               │
@@ -2506,16 +2173,16 @@ DeepSeek API (api.deepseek.com/v1/chat/completions)
 │  └─ 🔸 上呼吸道感染                  概率：低                 │
 │     伴随打喷嚏、流鼻涕等...                                    │
 │                                                             │
-│  💡 建议：                                                    │
+│  建议：                                                      │
 │  1. 保持环境通风降温，可提供冰垫                                │
 │  2. 梳毛促进排毛，必要时化毛膏                                │
 │  3. 观察 24 小时，若未改善建议就医                             │
 │                                                             │
-│  🚨 危险信号：                                                │
+│  危险信号：                                                  │
 │  • 如果出现持续性呕吐或呼吸困难请立即就医                       │
 │  • 如果 24 小时不进食请立即就医                                │
 │                                                             │
-│  [📝 把症状记录到健康档案]  [🧮 去营养助手算每日喂食量]        │
+│  [ 把症状记录到健康档案]  [ 去营养助手算每日喂食量]           │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -2573,26 +2240,26 @@ DeepSeek API (api.deepseek.com/v1/chat/completions)
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 10.4 前端技术约定
+### 9.4 前端技术约定
 
-与上文 10.5-10.8 节的 `card-glow` / `card-shine` 等 CSS 类直接对应，风格类名在 styles.css 中已有完整定义。
+与上文 9.5-9.8 节的 `card-glow` / `card-shine` 等 CSS 类直接对应，风格类名在 styles.css 中已有完整定义。
 
 | 约定 | 说明 |
 |------|------|
-| 图标 | `<script src="https://unpkg.com/lucide@latest"></script>` + `data-lucide="heart-pulse"` |
-| 图表 | `echarts.init(dom)` + `chart.setOption({...})` |
+| 图标 | `<script src="lib/lucide.min.js"></script>`（本地，非 CDN）+ `data-lucide="heart-pulse"` |
+| 图表 | `echarts.init(dom)` + `chart.setOption({...})`（库文件本地 `lib/echarts.min.js`） |
 | API 调用 | `fetch('/api/xxx').then(r => r.json())` |
 | 页面切换 | 单页应用，CSS class `section.active` 控制显示/隐藏 |
 | 主题色 CSS 变量 | `--primary: #FF8C42; --success: #4CAF50; --info: #4A90D9;` |
-| 卡片类 | `.card-glow` `.card-shine` `.white-line-top`（完整定义见 10.7 节 styles.css） |
+| 卡片类 | `.card-glow` `.card-shine` `.white-line-top`（完整定义见 9.7 节 styles.css） |
 
-### 10.5 导航栏 HTML 模板
+### 9.5 导航栏 HTML 模板
 
 ```html
 <header>
     <div class="header-container">
         <div class="logo">
-            <h1>🐾 PetHealth</h1>
+            <h1> PetHealth</h1>
             <span class="tagline">宠物健康管家</span>
         </div>
         <nav>
@@ -2615,11 +2282,11 @@ DeepSeek API (api.deepseek.com/v1/chat/completions)
 </header>
 ```
 
-### 10.6 script.js 核心骨架（完整可运行）
+### 9.6 script.js 核心骨架
 
 **文件位置**: `pethealth-web/src/main/resources/static/script.js`
 
-下面是一个**能直接跑通**的单页应用骨架。包含：API 封装、页面切换、登录/注册、帖子 CRUD、热门榜渲染、ECharts 初始化模板。**复制粘贴即可，不需要改一行代码就能看到效果**（前提是后端已启动）。
+下面是一个**能直接跑通**的单页应用骨架。包含：API 封装、页面切换、登录/注册、帖子 CRUD、热门榜渲染、ECharts 初始化模板。
 
 ```javascript
 // ===================== 全局状态 =====================
@@ -3048,7 +2715,7 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 ```
 
-### 10.7 styles.css 核心样式骨架
+### 9.7 styles.css 核心样式骨架
 
 **文件位置**: `pethealth-web/src/main/resources/static/styles.css`
 
@@ -3331,7 +2998,10 @@ section h2 {
                         to   { transform: translate(-50%, 0);       opacity: 1; } }
 ```
 
-### 10.8 index.html 骨架（必须包含的 CDN 引用）
+### 9.8 index.html 骨架（本地静态资源引用）
+
+> ECharts / Lucide 均**随 jar 打包在 `static/lib/` 本地提供**，不引用任何国外 CDN
+> （jsdelivr / unpkg 在大陆访问不稳定会导致图表空白、图标丢失）。
 
 **文件位置**: `pethealth-web/src/main/resources/static/index.html`
 
@@ -3343,16 +3013,16 @@ section h2 {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>🐾 PetHealth · 宠物健康管家</title>
 
-    <!-- 图表库 ECharts -->
-    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
-    <!-- 图标库 Lucide -->
-    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- 图表库 ECharts（本地化） -->
+    <script src="lib/echarts.min.js"></script>
+    <!-- 图标库 Lucide（本地化 UMD 1.47.0） -->
+    <script src="lib/lucide.min.js"></script>
 
-    <!-- 核心样式（10.7 节的完整 CSS 内容直接粘到 styles.css 里） -->
+    <!-- 核心样式（9.7 节的完整 CSS 内容直接粘到 styles.css 里） -->
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <!-- 10.5 节的导航栏 HTML 粘到这里 -->
+    <!-- 9.5 节的导航栏 HTML 粘到这里 -->
 
     <main>
         <!-- ====== 首页 ====== -->
@@ -3443,7 +3113,7 @@ section h2 {
         </section>
     </main>
 
-    <!-- 核心脚本（10.6 节的完整 JS 内容直接粘到 script.js 里） -->
+    <!-- 核心脚本（9.6 节的完整 JS 内容直接粘到 script.js 里） -->
     <script src="script.js"></script>
 </body>
 </html>
@@ -3451,9 +3121,9 @@ section h2 {
 
 ---
 
-## 11. 配置文件模板
+## 10. 配置文件模板
 
-### 11.1 pethealth-web 的 application.yml（主入口，单体）
+### 10.1 pethealth-web 的 application.yml（主入口，单体）
 
 ```yaml
 server:
@@ -3527,7 +3197,7 @@ logging:
     com.pethealth: DEBUG
 ```
 
-### 11.2 pet-service 的 application.yml（端口 8081）
+### 10.2 pet-service 的 application.yml（端口 8081）
 
 ```yaml
 server:
@@ -3564,7 +3234,7 @@ logging:
     com.pethealth: DEBUG
 ```
 
-### 11.3 health-record-service 的 application.yml（端口 8086 + LLM）
+### 10.3 health-record-service 的 application.yml（端口 8086 + LLM）
 
 ```yaml
 server:
@@ -3618,7 +3288,7 @@ logging:
 
 > 已移除 `rabbitmq` 与 `zipkin` 配置（项目未使用 MQ 与链路追踪）。
 
-### 11.4 reminder-service 的 application.yml（端口 8084）
+### 10.4 reminder-service 的 application.yml（端口 8084）
 
 ```yaml
 server:
@@ -3672,7 +3342,7 @@ management:
 
 > 已移除 `rabbitmq` 与 `mail.*` 配置：提醒为应用内触达（无邮件/SMS），无 MQ 依赖。
 
-### 11.5 营养助手配置说明
+### 10.5 营养助手配置说明
 
 营养助手是 pethealth-web 的**内置功能**（本地聚合计算），无需独立服务与额外配置：
 
@@ -3680,7 +3350,7 @@ management:
 - 计算规则、系数表与代码位置见 4.10 节
 - 演示数据：可用 `pethealth-web/fix-data/inject-health-data.ps1` 一键生成近 30 天、多类型、符合物种特征的健康记录
 
-### 11.6 microservices 父 POM（版本管理）
+### 10.6 microservices 父 POM（版本管理）
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -3714,7 +3384,7 @@ management:
 </project>
 ```
 
-### 11.7 环境变量速查
+### 10.7 环境变量速查
 
 ```bash
 # LLM（可选）：不设也行——本地由前端弹窗输入 Key；设置后作为服务端兜底 Key
@@ -3727,9 +3397,9 @@ export LLM_MODEL=deepseek-v4-flash
 
 ---
 
-## 12. 分布式追踪与监控
+## 11. 分布式追踪与监控
 
-### 12.1 Zipkin 链路追踪
+### 11.1 Zipkin 链路追踪
 
 每个服务都启用 Zipkin + Micrometer + Brave（算法设计简单直接，兼顾性能与可维护性）：
 
@@ -3757,15 +3427,15 @@ export LLM_MODEL=deepseek-v4-flash
                             └── MongoDB ──► pethealth_web
 ```
 
-### 12.2 各服务 Actuator 端点
+### 11.2 各服务 Actuator 端点
 
 默认 Spring Boot 3.x 暴露 `/actuator/health`、`/actuator/info`、`/actuator/prometheus`，方便 Prometheus 采集。
 
 ---
 
-## 13. 部署指南
+## 12. 部署指南
 
-### 13.1 本地开发环境准备（Windows PowerShell）
+### 12.1 本地开发环境准备（Windows PowerShell）
 
 > 所有依赖都**在本机直接安装**，不使用 Docker。
 > 下面是在 PowerShell 中可以直接复制粘贴执行的**真实命令**。
@@ -3790,7 +3460,7 @@ $env:LLM_MODEL   = "deepseek-v4-flash"
 # 提醒为应用内触达，无需 SMTP 邮件配置
 ```
 
-### 13.2 启动顺序（PowerShell）
+### 12.2 启动顺序（PowerShell）
 
 本地开发可以**跳过所有微服务，只启动 pethealth-web**（把 Dubbo reference 的 check: false 保留，Controller 里加 fallback 返回模拟数据），这是一种快速出 Demo 的策略。
 
@@ -3818,23 +3488,23 @@ mvn spring-boot:run -pl pethealth-web
 ```
 **手动启动步骤**
 ```
-# ① 前置依赖（13.1）
+# ① 前置依赖（12.1）
 & "C:\Program Files\MongoDB\Server\8.2\bin\mongod.exe" --config "f:\code\pet-health\mongod.cfg"   # MongoDB 27017
 redis-server                                                                                       # Redis 6379（已在跑可跳过）
 
-# ② 微服务 Provider（13.2 Step 1）— 3 个终端分别执行
+# ② 微服务 Provider（12.2 Step 1）— 3 个终端分别执行
 cd f:\code\pet-health\pet-service            ; mvn spring-boot:run -DskipTests   # 8081
 cd f:\code\pet-health\health-record-service  ; mvn spring-boot:run -DskipTests   # 8086
 cd f:\code\pet-health\reminder-service       ; mvn spring-boot:run -DskipTests   # 8084
 
-# ③ 主 Web（13.2 Step 2）
+# ③ 主 Web（12.2 Step 2）
 cd f:\code\pet-health
 mvn spring-boot:run -pl pethealth-web                                                 # 8080
 
 # ④ 浏览器打开 http://localhost:8080
 ```
 
-### 13.3 一键启动脚本（PowerShell）
+### 12.3 一键启动脚本（PowerShell）
 
 ```powershell
 # run-all.ps1 — 在项目根目录执行
@@ -3852,13 +3522,13 @@ foreach ($s in $services) {
 }
 ```
 
-### 13.4 阿里云 ECS 云服务器部署
+### 12.4 阿里云 ECS 云服务器部署
 
-#### 🎯 目标
+####  目标
 
-把项目部署到公网服务器上，让面试官能直接访问：**http://121.43.118.128**
+把项目部署到公网服务器上，能直接访问：**http://121.43.118.128**
 
-#### 🖥️ 服务器配置（已购买）
+####  服务器配置
 
 | 项目 | 值 |
 |------|-----|
@@ -3869,7 +3539,7 @@ foreach ($s in $services) {
 | CPU / 内存 | 2 vCPU / 2 GiB RAM |
 | 系统盘 | ESSD 40 GiB |
 
-#### ⚠️ 2核2G 内存约束 — 只跑单体
+#### 2核2G 内存约束 — 只跑单体
 
 2G RAM 装完系统 + MongoDB + Redis 只剩不到 600MB，跑多个 Spring Boot 微服务肯定 OOM。**云服务器上只部署 `pethealth-web` 单体**（Dubbo reference 保持 `check: false`，相关 Controller 里加 try-catch 返回空数据或模拟数据）。微服务架构在本地演示即可，云服务器上展示核心功能。
 
@@ -4343,7 +4013,7 @@ crontab -e
 
 ---
 
-## 14. 开发路线图
+## 13. 开发路线图
 
 > 按优先级排序，**先让 pethealth-web 单体跑起来**，再拆微服务，这样你能最快看到效果。
 
@@ -4355,20 +4025,20 @@ crontab -e
 - [ ] 写 PetProfile 实体 + PetProfileRepository（参考第 5.1 节完整代码，嵌套数组先写空 List）
 - [ ] 写 HealthRecord 实体 + HealthRecordRepository（参考第 5.2 节）
 - [ ] Controller 层：UserController、PostController、ReplyController、CommentController、LikeController、PetController、HealthRecordController
-- [ ] 前端三件套：根据第 10.5-10.8 节完整代码创建 index.html / script.js / styles.css（直接复制粘贴，改一下标题和 logo）
-- [ ] 配置好 MongoDB + Redis（第 11.1 节的 application.yml），启动 pethealth-web，浏览器访问 http://localhost:8080
+- [ ] 前端三件套：根据第 9.5-9.8 节完整代码创建 index.html / script.js / styles.css（直接复制粘贴，改一下标题和 logo）
+- [ ] 配置好 MongoDB + Redis（第 10.1 节的 application.yml），启动 pethealth-web，浏览器访问 http://localhost:8080
 - [ ] **验证：** 能注册登录（demo/123456）、发帖回复点赞、看到首页热门榜、ECharts 示例图表能显示
 
 ### Phase 2 — AI 健康助手（1 天）
 
 > ✅ **已实现（与下方早期计划的差异）**：无独立 `LLMClient`，真实实现为
-> `AIDiagnosisDubboServiceImpl`（Dubbo Provider，见 9.1.1）；web 端 `AIDiagnosisController`
+> `AIDiagnosisDubboServiceImpl`（Dubbo Provider，见 8.1.1）；web 端 `AIDiagnosisController`
 > 透传前端请求头 `X-LLM-Api-Key`。Key 无需写在配置里——前端弹窗输入即可；
 > 未配置时不抛异常，自动降级内置规则引擎。
 
 - [ ] 在 `health-record-service/` 下创建独立 Maven 模块（第 3.1 节目录结构）
-- [ ] ~~把第 9.2 节的 **完整 LLMClient.java** 复制进去~~ → 以实际 `AIDiagnosisDubboServiceImpl` 为准（9.2 仅设计参考）
-- [ ] 把第 10.6 节的 AI 诊断 UI 粘到 index.html 里，调用 `/api/ai-diagnosis`（另需"设置 API Key"弹窗 + localStorage）
+- [ ]  以实际 `AIDiagnosisDubboServiceImpl` 为准（8.2 仅设计参考）
+- [ ] 把第 9.6 节的 AI 诊断 UI 粘到 index.html 里，调用 `/api/ai-diagnosis`（另需"设置 API Key"弹窗 + localStorage）
 - [ ] 写 `AIDiagnosisController`，经 Dubbo 调 `diagnose(..., apiKey)`
 - [ ] **验证：** 输入"我家猫今天没精神，不爱动"，配置 Key 时约 5~30 秒返回纯文本 AI 分析；未配置 Key 时正常返回规则引擎结果（不报错）
 
@@ -4402,7 +4072,7 @@ crontab -e
 
 ### Phase 7 — 打磨 + 生产化（1 天）
 
-- [ ] Zipkin 分布式追踪（每个微服务都加，第 12 节）
+- [ ] Zipkin 分布式追踪（每个微服务都加，第 11 节）
 - [ ] Actuator health 端点 + Prometheus 指标
 - [ ] 统一异常处理 `GlobalExceptionHandler`
 - [ ] 输入参数校验（`@Valid` + JSR 303）

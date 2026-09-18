@@ -126,11 +126,20 @@ public class ReminderService {
     }
 
     /**
-     * 查询即将到期的提醒（未来 N 天内）
+     * 查询即将到期的提醒（未来 N 天内，全量，供定时调度等系统进程使用）
      */
     public List<Reminder> findDueWithin(int days) {
         LocalDateTime end = LocalDateTime.now().plusDays(days);
         return reminderRepository.findByStatusAndRemindAtBefore("PENDING", end);
+    }
+
+    /**
+     * 查询某用户即将到期的提醒（未来 N 天内）。
+     * 用户侧查询必须带 owner 过滤，防止跨用户串号。
+     */
+    public List<Reminder> findDueWithin(String ownerId, int days) {
+        LocalDateTime end = LocalDateTime.now().plusDays(days);
+        return reminderRepository.findByOwnerIdAndStatusAndRemindAtBefore(ownerId, "PENDING", end);
     }
 
     /**
