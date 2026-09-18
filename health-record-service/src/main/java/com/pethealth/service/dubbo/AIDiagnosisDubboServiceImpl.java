@@ -46,17 +46,24 @@ public class AIDiagnosisDubboServiceImpl implements AIDiagnosisDubboService {
 
     @Override
     public Map<String, Object> diagnose(String petId, String species, String breed,
-                                        int ageMonths, String symptoms, String duration) {
+                                        int ageMonths, String symptoms, String duration,
+                                        String requestApiKey) {
         log.info("Dubbo AI diagnose: petId={}, species={}, breed={}, age={}月, symptoms={}, duration={}",
                 petId, species, breed, ageMonths, symptoms, duration);
 
         List<String> symptomList = normalizeSymptoms(symptoms);
         Map<String, Object> result = new HashMap<>();
 
-        // 如果配置了 API Key 则尝试调 LLM，失败回退到规则引擎
-        if (apiKey != null && !apiKey.isBlank() && !apiKey.equals("your-api-key-here")) {
+        // Key 优先级：请求级（前端用户输入）> 环境变量 LLM_API_KEY > 规则引擎降级。
+        // 请求级 Key 仅在本次调用内存中使用，不落库、不缓存；日志只打印脱敏标记。
+        String effectiveKey = resolveApiKey(requestApiKey);
+        boolean keyFromRequest = effectiveKey != null && effectiveKey.equals(normalizeKey(requestApiKey));
+
+        if (effectiveKey != null) {
+            log.info("AI 诊断使用 LLM（Key 来源: {}），Key: {}",
+                    keyFromRequest ? "请求传入" : "环境变量", maskKey(effectiveKey));
             try {
-                Map<String, Object> llmResult = callLLM(species, breed, ageMonths, symptomList, duration);
+                Map<String, Object> llmResult = callLLM(effectiveKey, species, breed, ageMonths, symptomList, duration);
                 result.putAll(llmResult);
                 result.put("source", "llm");
             } catch (Exception e) {
@@ -67,6 +74,7 @@ public class AIDiagnosisDubboServiceImpl implements AIDiagnosisDubboService {
                 result.put("llmError", e.getMessage());
             }
         } else {
+            log.info("未配置 LLM API Key，使用内置规则引擎");
             // 内置规则引擎
             Map<String, Object> ruleBased = ruleBasedDiagnose(species, breed, ageMonths, symptomList, duration);
             result.putAll(ruleBased);
@@ -74,6 +82,32 @@ public class AIDiagnosisDubboServiceImpl implements AIDiagnosisDubboService {
         }
 
         return result;
+    }
+
+    /** 去除空白；空串或占位符视为未配置 */
+    private String normalizeKey(String key) {
+        if (key == null) return null;
+        String k = key.trim();
+        if (k.isEmpty() || "your-api-key-here".equals(k)) return null;
+        return k;
+    }
+
+    /**
+     * 解析本次调用实际使用的 Key：请求级优先，其次启动时注入的环境变量配置。
+     * 任一来源都未配置时返回 null（调用方走规则引擎）。
+     */
+    private String resolveApiKey(String requestApiKey) {
+        String requestKey = normalizeKey(requestApiKey);
+        if (requestKey != null) return requestKey;
+        return normalizeKey(apiKey);
+    }
+
+    /** 日志脱敏：仅保留 sk- 前缀与末 4 位，如 sk-****ab12 */
+    private String maskKey(String key) {
+        if (key == null || key.length() < 8) return "****";
+        String tail = key.substring(key.length() - 4);
+        String prefix = key.startsWith("sk-") ? "sk-" : "";
+        return prefix + "****" + tail;
     }
 
     @Override
@@ -313,7 +347,7 @@ public class AIDiagnosisDubboServiceImpl implements AIDiagnosisDubboService {
      * 请求体由 fastjson2 序列化：content 字段为明文文本（自动做 JSON 转义），
      * 响应体按 choices[0].message.content 解析，避免此前 URL 编码/字符串截断导致的乱码与截断。
      */
-    private Map<String, Object> callLLM(String species, String breed, int ageMonths,
+    private Map<String, Object> callLLM(String key, String species, String breed, int ageMonths,
                                         List<String> symptoms, String duration) throws Exception {
         String prompt = buildPrompt(species, breed, ageMonths, symptoms, duration);
         String url = "https://api.deepseek.com/v1/chat/completions";
@@ -329,12 +363,14 @@ public class AIDiagnosisDubboServiceImpl implements AIDiagnosisDubboService {
         HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
         conn.setRequestMethod("POST");
         conn.setRequestProperty("Content-Type", "application/json");
-        conn.setRequestProperty("Authorization", "Bearer " + apiKey);
+        conn.setRequestProperty("Authorization", "Bearer " + key);
         conn.setDoOutput(true);
-        // HTTP 超时总和必须小于 Dubbo provider.timeout(10s)，否则 LLM 稍慢时
-        // consumer 端先超时降级再本地重调一次 LLM，导致双倍延迟与双倍费用
-        conn.setConnectTimeout(2_000);
-        conn.setReadTimeout(7_000);
+        // DeepSeek 为非流式调用：请求到达即开始计费，但完整响应需逐 token 生成，
+        // 实测常在 5~30s。readTimeout 过短会在模型已扣费但未吐完响应时断开，
+        // 导致 SocketTimeoutException 并误降级到规则引擎（前端看到"默认信息"）。
+        // 各层超时需满足：HTTP(65s) < Dubbo provider(65s) ≤ Dubbo consumer(70s)。
+        conn.setConnectTimeout(5_000);
+        conn.setReadTimeout(60_000);
 
         try (OutputStream os = conn.getOutputStream()) {
             os.write(body.getBytes(StandardCharsets.UTF_8));
@@ -391,6 +427,16 @@ public class AIDiagnosisDubboServiceImpl implements AIDiagnosisDubboService {
                 1. 可能原因（2-3 种常见情况）
                 2. 居家护理建议
                 3. 危险信号（需要立即就医的情况）
+
+                【输出格式硬性要求】
+                - 只能输出纯文本，严禁使用任何 Markdown 语法或符号：
+                  不要使用 #、*、**、-、+、>、反引号、方括号链接等标记。
+                - 段落标题直接写中文文字并以冒号结尾，例如：可能原因：、居家护理建议：、危险信号：
+                - 不要使用项目符号（- 或 *）开头；如需分条，请直接用中文序号，
+                  例如“第一，……”“第二，……”；
+                  或“1）……”“2）……”；
+                  再或者“首先，……”“其次，……”“然后，……”。
+                - 各段落之间用一个空行分隔。
                 """.formatted(species, breed, ageMonths, symptoms, duration, notes);
     }
 

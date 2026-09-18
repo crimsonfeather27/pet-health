@@ -18,10 +18,14 @@ public interface AIDiagnosisDubboService {
      * @param ageMonths 月龄
      * @param symptoms  症状（逗号或顿号分隔的字符串）
      * @param duration  持续时间
+     * @param apiKey    请求级 LLM API Key（由前端用户输入、web 层透传，可为空）；
+     *                  为空时回退到 Provider 环境变量配置，再为空则走内置规则引擎。
+     *                  Provider 不落库、不缓存、不记录该值。
      * @return 诊断结果 Map
      */
     Map<String, Object> diagnose(String petId, String species, String breed,
-                                  int ageMonths, String symptoms, String duration);
+                                  int ageMonths, String symptoms, String duration,
+                                  String apiKey);
 
     /**
      * 生成健康报告

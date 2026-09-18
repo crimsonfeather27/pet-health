@@ -205,8 +205,12 @@
                         <option>2-3天</option><option>一周以上</option>
                     </select>
                 </div>
-                <button class="btn btn-primary" onclick="submitDiagnosis()">开始 AI 诊断</button>
+                <button class="btn btn-primary" id="diag-submit-btn" onclick="submitDiagnosis()">开始 AI 诊断</button>
                 <button class="btn btn-secondary" style="margin-left:0.5rem" onclick="showHealthReportModal()">生成健康报告</button>
+                <div style="margin-top:0.6rem;font-size:0.8rem;color:var(--text-muted)">
+                    DeepSeek Key：<span id="llm-key-status">未配置</span>
+                    <button class="btn btn-secondary btn-tiny" style="margin-left:0.5rem" onclick="showLlmKeyModal()">设置 API Key</button>
+                </div>
                 <div id="ai-result"></div>
             </div>
         </section>

@@ -36,7 +36,8 @@ public class AIDiagnosisController {
     @DubboReference(
             url = "dubbo://localhost:20885/com.pethealth.service.dubbo.AIDiagnosisDubboService",
             check = false,
-            timeout = 15000
+            // 需略大于 provider 调 DeepSeek 的 readTimeout(60s)，避免模型正常生成时 consumer 先超时
+            timeout = 70000
     )
     private AIDiagnosisDubboService aiDiagnosisDubboService;
 
@@ -49,14 +50,19 @@ public class AIDiagnosisController {
     private static final int AI_DIAGNOSIS_LIMIT = 10;
     private static final long AI_DIAGNOSIS_WINDOW_SECONDS = 60;
 
+    /** 前端透传请求级 LLM Key 的请求头（仅本次调用使用，不记录、不落库） */
+    private static final String LLM_API_KEY_HEADER = "X-LLM-Api-Key";
+
     /**
      * POST /api/ai-diagnosis — AI 诊断
      * <p>
-     * 统一走 Dubbo 远程诊断（provider 内部已实现 LLM → 规则引擎的降级）。
+     * 统一走 Dubbo 远程诊断（provider 内部按 请求Key > 环境变量 > 规则引擎 选择）。
      * web 层不再本地调用 LLM，避免双重调用与密钥分散。
      */
     @PostMapping
     public ApiResponse<Map<String, Object>> diagnose(@RequestBody Map<String, Object> req,
+                                                     @RequestHeader(value = LLM_API_KEY_HEADER, required = false)
+                                                     String llmApiKey,
                                                      HttpServletRequest request) {
         // 写接口已由 AuthInterceptor 强制登录，这里取 userId 做限流维度
         String userId = AuthContext.userId(request);
@@ -74,8 +80,9 @@ public class AIDiagnosisController {
 
         String symptomsStr = toSymptomsString(req.getOrDefault("symptoms", ""));
 
-        log.info("AI诊断请求: species={}, breed={}, age={}月, symptoms={}, duration={}",
-                species, breed, ageMonths, symptomsStr, duration);
+        log.info("AI诊断请求: species={}, breed={}, age={}月, symptoms={}, duration={}, 携带请求级Key={}",
+                species, breed, ageMonths, symptomsStr, duration,
+                llmApiKey != null && !llmApiKey.isBlank());
 
         if (!dubboEnabled) {
             return ApiResponse.error(503, "AI 诊断服务未启用");
@@ -83,7 +90,7 @@ public class AIDiagnosisController {
 
         try {
             Map<String, Object> remote = aiDiagnosisDubboService.diagnose(
-                    petId, species, breed, ageMonths, symptomsStr, duration);
+                    petId, species, breed, ageMonths, symptomsStr, duration, llmApiKey);
             if (remote == null || remote.isEmpty()) {
                 return ApiResponse.error(500, "AI 诊断返回为空");
             }

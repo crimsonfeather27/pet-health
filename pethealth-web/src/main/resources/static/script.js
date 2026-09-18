@@ -18,12 +18,13 @@ function esc(v) { return escHtml(v); }
 // ===================== 通用 API 封装 =====================
 // Token 已改为 HttpOnly Cookie（#6）：前端不再持有 / 发送 Authorization 头，
 // 浏览器自动携带 Cookie。credentials: 'same-origin' 确保 fetch 附带 Cookie。
-async function api(method, url, body = null) {
+async function api(method, url, body = null, extraHeaders = null) {
     const opts = {
         method,
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
     };
+    if (extraHeaders) Object.assign(opts.headers, extraHeaders);
     if (body) opts.body = JSON.stringify(body);
 
     const res = await fetch(url, opts);
@@ -38,10 +39,10 @@ async function api(method, url, body = null) {
     if (json.code !== 200) throw new Error(json.message || '请求失败');
     return json.data;
 }
-const apiGet    = (url)         => api('GET',    url);
-const apiPost   = (url, body)   => api('POST',   url, body);
-const apiPut    = (url, body)   => api('PUT',    url, body);
-const apiDelete = (url)         => api('DELETE', url);
+const apiGet    = (url, headers)       => api('GET',    url, null, headers);
+const apiPost   = (url, body, headers) => api('POST',   url, body, headers);
+const apiPut    = (url, body, headers) => api('PUT',    url, body, headers);
+const apiDelete = (url, headers)       => api('DELETE', url, null, headers);
 
 // ===================== 页面切换 =====================
 // 可通过 URL hash 直达的区块集合
@@ -88,6 +89,9 @@ async function loadSectionData(id) {
 async function loadAIDiagnosisPage() {
     const sel = document.getElementById('diag-pet-select');
     if (!sel) return;
+
+    // 刷新本地 DeepSeek Key 的配置状态
+    updateLlmKeyStatus();
 
     // 填充前临时禁用，避免用户交互期间选项为空
     sel.disabled = true;
@@ -162,6 +166,7 @@ function showLoginModal() {
     const html = `
         <div class="modal" id="login-modal">
             <div class="modal-content">
+                <button class="modal-close" onclick="closeModal('login-modal')">✕</button>
                 <h3>登录 PetHealth</h3>
                 <div class="form-group">
                     <label>用户名</label>
@@ -172,8 +177,6 @@ function showLoginModal() {
                     <input id="login-password" type="password" placeholder="123456">
                 </div>
                 <button class="btn btn-primary full-width" onclick="doLogin()">登录</button>
-                <p class="modal-hint">测试账号: demo / 123456</p>
-                <button class="modal-close" onclick="closeModal('login-modal')">✕</button>
             </div>
         </div>`;
     openModal(html);
@@ -183,6 +186,7 @@ function showRegisterModal() {
     const html = `
         <div class="modal" id="register-modal">
             <div class="modal-content">
+                <button class="modal-close" onclick="closeModal('register-modal')">✕</button>
                 <h3>注册 PetHealth</h3>
                 <div class="form-group">
                     <label>用户名</label>
@@ -197,7 +201,6 @@ function showRegisterModal() {
                     <input id="reg-password" type="password" placeholder="至少 6 位">
                 </div>
                 <button class="btn btn-primary full-width" onclick="doRegister()">注册</button>
-                <button class="modal-close" onclick="closeModal('register-modal')">✕</button>
             </div>
         </div>`;
     openModal(html);
@@ -1961,7 +1964,109 @@ function nl2br(s) {
     return escHtml(s).replace(/\n/g, '<br>');
 }
 
-async function submitDiagnosis() {
+/**
+ * 剥离 LLM 输出中残留的 Markdown 标记，按纯文本展示。
+ * 后端 prompt 已要求纯文本，此处作为安全网：标题#、粗体**、项目符号-/*、
+ * 斜体*、行内代码反引号、引用>、删除线~~ 等一律去掉符号但保留文字。
+ */
+function stripMarkdown(text) {
+    if (!text) return '';
+    return text
+        .replace(/```[^\n]*\n?/g, '')          // 代码围栏开/关行
+        .replace(/^\s{0,3}#{1,6}\s*/gm, '')    // 标题标记 #...######
+        .replace(/^\s*[-*+]\s+/gm, '')         // 无序列表标记 -/*/+
+        .replace(/^\s{0,3}>\s?/gm, '')         // 引用标记 >
+        .replace(/\*\*([^*]+)\*\*/g, '$1')     // 粗体 **文字**
+        .replace(/__([^_]+)__/g, '$1')         // 粗体 __文字__
+        .replace(/~~([^~]+)~~/g, '$1')         // 删除线 ~~文字~~
+        .replace(/`([^`]+)`/g, '$1')           // 行内代码 `文字`
+        .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1$2') // 斜体 *文字*
+        .replace(/[ \t]+$/gm, '')              // 行尾空白
+        .replace(/\n{3,}/g, '\n\n')            // 3 个以上换行压成 1 个空行
+        .trim();
+}
+
+// ---- DeepSeek API Key 本地管理（仅存使用者浏览器 localStorage，不入库） ----
+const LLM_KEY_STORAGE = 'pethealth:llm-api-key';
+const LLM_KEY_HEADER  = 'X-LLM-Api-Key';
+// 弹窗模式：'diagnose' = 诊断前引导（保存/跳过后继续诊断）；'manage' = 仅设置
+let llmKeyModalMode = 'manage';
+
+const getLlmApiKey = () => (localStorage.getItem(LLM_KEY_STORAGE) || '').trim();
+function setLlmApiKey(k) {
+    const v = (k || '').trim();
+    if (v) localStorage.setItem(LLM_KEY_STORAGE, v);
+    else   localStorage.removeItem(LLM_KEY_STORAGE);
+}
+function maskLlmKey(k) {
+    k = (k || '').trim();
+    if (!k) return '未配置';
+    if (k.length < 8) return '****';
+    return (k.startsWith('sk-') ? 'sk-' : '') + '****' + k.slice(-4);
+}
+/** 刷新 AI 页 Key 状态文案 */
+function updateLlmKeyStatus() {
+    const el = document.getElementById('llm-key-status');
+    if (el) el.textContent = maskLlmKey(getLlmApiKey());
+}
+
+/** Key 设置弹窗；mode='diagnose' 时保存/跳过后自动继续本次诊断 */
+function showLlmKeyModal(mode = 'manage') {
+    llmKeyModalMode = mode;
+    const saved = getLlmApiKey();
+    const html = `
+        <div class="modal" id="llm-key-modal">
+            <div class="modal-content">
+                <button class="modal-close" onclick="closeModal('llm-key-modal')">✕</button>
+                <h3>设置 DeepSeek API Key</h3>
+                <p class="modal-hint" style="text-align:left;margin-bottom:1rem">
+                    Key 仅保存在当前浏览器（localStorage），<b>不会写入服务器或代码仓库</b>；
+                    诊断时经本机后端转发调用 DeepSeek，服务端不记录、不存储。留空则使用内置规则引擎。
+                </p>
+                <div class="form-group">
+                    <label>API Key</label>
+                    <input id="llm-key-input" type="password" placeholder="sk-..." value="${escHtml(saved)}">
+                </div>
+                <button class="btn btn-primary full-width" onclick="saveLlmKey()">
+                    ${mode === 'diagnose' ? '保存并开始诊断' : '保存'}
+                </button>
+                <div class="modal-actions" style="justify-content:space-between;margin-top:0.75rem">
+                    <button class="btn btn-secondary btn-tiny" onclick="clearLlmKey()">清除已保存的 Key</button>
+                    ${mode === 'diagnose'
+                        ? '<button class="btn btn-secondary btn-tiny" onclick="skipLlmKey()">跳过，用内置规则</button>'
+                        : ''}
+                </div>
+                <p class="modal-hint">申请地址：platform.deepseek.com → API Keys</p>
+            </div>
+        </div>`;
+    openModal(html);
+    document.getElementById('llm-key-input')?.focus();
+}
+
+function saveLlmKey() {
+    const v = document.getElementById('llm-key-input')?.value || '';
+    setLlmApiKey(v);
+    const mode = llmKeyModalMode;
+    closeModal('llm-key-modal');
+    showToast(v ? 'API Key 已保存到本浏览器' : '已清空 API Key');
+    updateLlmKeyStatus();
+    if (mode === 'diagnose') submitDiagnosis(true);
+}
+
+function skipLlmKey() {
+    closeModal('llm-key-modal');
+    if (llmKeyModalMode === 'diagnose') submitDiagnosis(true);
+}
+
+function clearLlmKey() {
+    setLlmApiKey('');
+    const input = document.getElementById('llm-key-input');
+    if (input) input.value = '';
+    showToast('已清除保存的 Key');
+    updateLlmKeyStatus();
+}
+
+async function submitDiagnosis(skipKeyCheck = false) {
     const petId = document.getElementById('diag-pet-select')?.value || '';
     const symptoms = document.getElementById('diag-symptoms')?.value || '';
     const duration = document.getElementById('diag-duration')?.value || '1天';
@@ -1972,7 +2077,15 @@ async function submitDiagnosis() {
         return;
     }
 
-    resultBox.innerHTML = '<p class="loading">AI 正在分析中...</p>';
+    // 首次使用且未配置 Key：弹窗引导（可填 Key 走真实 LLM，也可跳过走规则引擎）
+    if (!skipKeyCheck && !getLlmApiKey()) {
+        showLlmKeyModal('diagnose');
+        return;
+    }
+
+    const submitBtn = document.getElementById('diag-submit-btn');
+    if (submitBtn) submitBtn.disabled = true;
+    resultBox.innerHTML = '<p class="loading">AI 正在分析中，模型生成约需 5~30 秒，请勿重复点击或关闭页面...</p>';
 
     // 从宠物缓存中取出选中宠物的真实信息（兜底示例数据，避免空请求）
     const pet = (AppState.petCache || []).find(p => p.id === petId) || {};
@@ -1980,11 +2093,16 @@ async function submitDiagnosis() {
     const breed      = pet.breed     || '未知';
     const ageMonths  = pet.ageMonths != null ? pet.ageMonths : 12;
 
+    // 请求级 Key：仅在本请求头中携带，后端用完即弃
+    const headers = {};
+    const llmKey = getLlmApiKey();
+    if (llmKey) headers[LLM_KEY_HEADER] = llmKey;
+
     try {
         const data = await apiPost('/api/ai-diagnosis', {
             petId, species, breed, ageMonths,
             symptoms, duration
-        });
+        }, headers);
         const parsed = typeof data === 'string' ? JSON.parse(data) : data;
         const causes   = parsed.possibleCauses;      // 规则引擎=数组；LLM=整段文本
         const redFlags = parsed.redFlags || parsed.dangerSignals;
@@ -1999,17 +2117,19 @@ async function submitDiagnosis() {
                  + '</ul>';
             html += '<h4>建议：</h4><ol>' + (suggArr.map(s => `<li>${escHtml(s)}</li>`).join('') || '') + '</ol>';
         } else {
-            // LLM 自由文本：整段展示
-            html += '<h4>AI 分析结果：</h4><div class="ai-text-block">' + nl2br(causes || 'AI 未返回内容') + '</div>';
-            if (suggArr.length) html += '<p class="ai-text-sub">' + escHtml(suggArr.join('；')) + '</p>';
+            // LLM 自由文本：剥离残留 Markdown 标记后按纯文本展示
+            html += '<h4>AI 分析结果：</h4><div class="ai-text-block">' + nl2br(stripMarkdown(causes || 'AI 未返回内容')) + '</div>';
+            if (suggArr.length) html += '<p class="ai-text-sub">' + escHtml(stripMarkdown(suggArr.join('；'))) + '</p>';
         }
         if (redArr.length) {
-            html += '<h4>危险信号：</h4><ul>' + redArr.map(s => `<li class="red-flag">${escHtml(s)}</li>`).join('') + '</ul>';
+            html += '<h4>危险信号：</h4><ul>' + redArr.map(s => `<li class="red-flag">${escHtml(stripMarkdown(s))}</li>`).join('') + '</ul>';
         }
         html += `<p class="disclaimer">${escHtml(parsed.disclaimer) || '本建议仅供参考，不能替代兽医诊断'}</p></div>`;
         resultBox.innerHTML = html;
     } catch (e) {
         resultBox.innerHTML = `<p class="empty-hint">AI 调用失败：${escHtml(e.message)}</p>`;
+    } finally {
+        if (submitBtn) submitBtn.disabled = false;
     }
 }
 
