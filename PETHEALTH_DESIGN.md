@@ -311,22 +311,17 @@ pethealth/                                          ← 项目根目录
 │       ├── java/com/pethealth/
 │       │   ├── HealthRecordServiceApplication.java
 │       │   ├── config/
-│       │   │   ├── RedisConfig.java
-│       │   │   ├── CorsConfig.java
-│       │   │   └── GlobalExceptionHandler.java
+│       │   │   └── RedisConfig.java
 │       │   ├── entity/
 │       │   │   └── HealthRecord.java                 ← 实际在 pethealth-api，此处共享
 │       │   ├── repository/
 │       │   │   └── HealthRecordRepository.java
-│       │   ├── service/
-│       │   │   ├── HealthRecordService.java
-│       │   │   ├── HealthRecordStatsService.java    ← 周/月聚合缓存（键带周期起点）
-│       │   │   ├── LLMClient.java                    ← AI 诊断核心
-│       │   │   ├── AIDiagnosisService.java
-│       │   │   └── HealthRecordDubboServiceImpl.java
-│       │   └── controller/
-│       │       ├── HealthRecordController.java
-│       │       └── AIDiagnosisController.java
+│       │   └── service/
+│       │       ├── HealthRecordStatsService.java     ← 周/月聚合缓存（键带周期起点）
+│       │       └── dubbo/
+│       │           ├── AIDiagnosisDubboServiceImpl.java  ← AI 诊断核心（callLLM + 规则引擎兜底，请求级 Key）
+│       │           └── HealthRecordDubboServiceImpl.java
+│       │   （纯 Dubbo Provider，无 controller；HTTP 入口在 pethealth-web）
 │       └── resources/
 │           └── application.yml
 │
@@ -1717,9 +1712,19 @@ public class DelayMessageConsumer {
 | Method | Path | 说明 |
 |--------|------|------|
 | POST | `/api/ai-diagnosis` | 症状描述 → AI 初步诊断（Dubbo 调 health-record-service） |
-| GET  | `/api/ai-diagnosis/report?ownerId=&petId=&period=WEEKLY\|MONTHLY` | AI 生成健康周报/月报 |
+| GET  | `/api/ai-diagnosis/report?ownerId=&petId=&period=WEEKLY\|MONTHLY` | AI 生成健康周报/月报（本地健康记录聚合，不调用 LLM、不需要 Key） |
 
-**AI 诊断请求体：**
+> **LLM API Key 传递方式**：仓库与服务端均不内置真实 Key。用户在前端"设置 API Key"弹窗中输入，
+> 浏览器存于 `localStorage`（键 `pethealth:llm-api-key`），每次诊断通过**可选请求头**
+> `X-LLM-Api-Key: sk-xxx` 上送；web 层只做透传（不记录、不落库、不落 Redis），
+> 经 Dubbo `diagnose(..., apiKey)` 传到 health-record-service 后仅在本次调用内存中使用。
+
+**AI 诊断请求：**
+```
+POST /api/ai-diagnosis
+X-LLM-Api-Key: sk-xxxxxxxx        （可选；未携带且环境变量也未配置时走内置规则引擎）
+Content-Type: application/json
+```
 ```json
 {
   "petId": "xxx",
@@ -1731,23 +1736,31 @@ public class DelayMessageConsumer {
 }
 ```
 
-**AI 诊断响应体：**
+**AI 诊断响应体（LLM 命中时）：**
+`possibleCauses` 在 LLM 模式下为**整段纯文本**（规则引擎模式下才是对象数组）；
+前端据此区分渲染，并对文本做 Markdown 剥离（`# * ** - ` 等符号不展示）。
+
 ```json
 {
-  "possibleCauses": [
-    { "name": "天气炎热导致食欲下降", "probability": "中", "description": "..." },
-    { "name": "毛球症", "probability": "中高", "description": "..." },
-    { "name": "上呼吸道感染", "probability": "低", "description": "..." }
-  ],
-  "suggestions": [
-    "保持环境通风降温，可提供冰垫",
-    "梳毛促进排毛，必要时化毛膏",
-    "观察 24 小时，若未改善建议就医"
-  ],
-  "redFlags": ["如果出现持续性呕吐或呼吸困难请立即就医"],
-  "disclaimer": "本建议仅供参考，不能替代兽医诊断"
+  "possibleCauses": "可能原因：……（纯文本，可能含换行，不含 Markdown 符号）",
+  "suggestions": ["建议根据 AI 诊断结果采取相应措施，持续不缓解请就医。"],
+  "redFlags": ["若出现紧急情况（抽搐/呼吸困难/血便）请立即送医！"],
+  "disclaimer": "AI 诊断仅供参考，不能替代专业兽医。",
+  "source": "dubbo-remote"
 }
 ```
+
+**Key 与降级策略（health-record-service 侧优先级）：**
+1. 请求头传入的用户级 Key（最高优先级）
+2. 服务端环境变量 `LLM_API_KEY`（真实部署时的兜底）
+3. 两者都无 → 内置规则引擎，`possibleCauses` 返回带 `probability` 的对象数组
+
+LLM 调用失败（网络/超时/鉴权错误）时自动回退规则引擎，并在结果中带 `source=rule-fallback`、`llmError`。
+正常 LLM 结果标记为 `llm`，规则引擎为 `rule-engine`（web 层统一再包一层 `dubbo-remote`）。
+
+> **超时链路（非流式调用，DeepSeek 完整响应常需 5~30 秒，过短会"已扣费却降级"）：**
+> 浏览器等待 70s ＞ Dubbo Consumer `@DubboReference(timeout=70000)` ＞
+> Dubbo Provider `dubbo.provider.timeout=65000` ＞ HTTP `readTimeout=60000`（connect 5s）。
 
 ### 6.5 社区帖子
 
@@ -1945,8 +1958,11 @@ public interface HealthRecordDubboService {
 ```java
 @DubboService
 public interface AIDiagnosisDubboService {
+    // apiKey 为前端透传的请求级 DeepSeek Key（可空）；为空时回退环境变量 LLM_API_KEY，
+    // 再为空则走内置规则引擎。Provider 不落库、不缓存、日志脱敏。
     Map<String, Object> diagnose(String petId, String species, String breed,
-                                 int ageMonths, String symptoms, String duration);
+                                 int ageMonths, String symptoms, String duration,
+                                 String apiKey);
     String generateHealthReport(String ownerId, String petId, String period); // WEEKLY / MONTHLY
 }
 ```
@@ -2067,11 +2083,45 @@ public void onReminder(String payload) {
 ### 9.1 技术选型
 
 - **LLM**: DeepSeek API（便宜且效果好，适合 AI 健康诊断场景）
-- **HTTP 客户端**: OkHttp 4.12.0
+- **HTTP 客户端**: 实际调用使用 JDK 原生 `HttpURLConnection`（`AIDiagnosisDubboServiceImpl#callLLM`，fastjson2 序列化请求体）；pom 中同时声明了 OkHttp 依赖
 - **API**: `https://api.deepseek.com/v1/chat/completions`
 - **模型**: `deepseek-v4-flash`（或 `deepseek-chat`）
+- **输出约束**: Prompt 硬性要求纯文本（禁止 `# * ** -` 等 Markdown 语法），前端 `stripMarkdown()` 再做一次兜底剥离
+
+### 9.1.1 API Key 安全方案（仓库零密钥）
+
+为保证项目上传 GitHub 不泄露 Key，同时 AI 模块在本地/演示环境可用，采用"**浏览器持有、按请求透传、服务端不落盘**"方案：
+
+```
+用户在弹窗输入 Key
+   │  保存于 localStorage（pethealth:llm-api-key），页面显示 sk-****末4位 掩码
+   ▼
+浏览器  POST /api/ai-diagnosis  + 请求头 X-LLM-Api-Key
+   ▼
+pethealth-web  AIDiagnosisController（@RequestHeader 可选读取；不记日志、不存储）
+   ▼  Dubbo：diagnose(petId, species, breed, ageMonths, symptoms, duration, apiKey)
+health-record-service  AIDiagnosisDubboServiceImpl
+   ▼  effectiveKey = 请求Key ?? 环境变量 LLM_API_KEY；日志仅打印 sk-****末4位
+DeepSeek API（Authorization: Bearer <effectiveKey>）
+   ▼
+无可用 Key 或调用失败 → 内置规则引擎兜底（source 区分 llm / rule-fallback / rule-engine）
+```
+
+要点：
+- `application.yml` 中 `llm.api-key` 默认留空（`${LLM_API_KEY:}`），仓库不含任何真实 Key；
+- 前端未配置 Key 时点诊断，弹窗引导输入，可"保存并诊断"或"跳过，用内置规则"；
+- 诊断期间按钮置灰防重复提交（重复提交会重复扣费），提示"模型生成约需 5~30 秒"；
+- 环境变量 `LLM_API_KEY` 保留为真实部署的服务端兜底，优先级低于用户请求级 Key；
+- 局限：Key 存于使用者本机浏览器，适合本地/教学/演示；多用户公网部署应改为服务端账号体系。
 
 ### 9.2 LLMClient 完整实现代码（可直接复制粘贴）
+
+> ⚠️ **本节为早期设计稿，与当前真实实现有出入**。实际代码中不存在独立的 `LLMClient` 类，
+> LLM 调用、Prompt 构造、规则引擎兜底均内聚在
+> `health-record-service/.../service/dubbo/AIDiagnosisDubboServiceImpl.java`
+> （`diagnose` / `callLLM` / `buildPrompt` / `ruleBasedDiagnose`），且：
+> HTTP 客户端用 `HttpURLConnection` 而非 OkHttp；Key 支持请求级注入（见 9.1.1）；
+> 读超时为 60s；Prompt 要求纯文本输出。以下代码仅保留作设计参考。
 
 **文件位置**: `health-record-service/src/main/java/com/pethealth/service/LLMClient.java`
 
@@ -2327,22 +2377,23 @@ public class LLMClient {
 ### 9.4 AI 调用链路
 
 ```
-前端 POST /api/ai-diagnosis
+前端 POST /api/ai-diagnosis（请求头 X-LLM-Api-Key，Key 存 localStorage）
    │
    ▼
-AIDiagnosisController (pethealth-web :8080)
+AIDiagnosisController (pethealth-web :8080)  ← 透传 Key，不记录/不存储
    │
-   ▼ Dubbo
+   ▼ Dubbo diagnose(..., apiKey)
 AIDiagnosisDubboServiceImpl (health-record-service :8086)
-   │
+   │  effectiveKey = 请求Key → 环境变量 LLM_API_KEY
    ▼
-LLMClient.callLLM()
+callLLM()：HttpURLConnection（readTimeout 60s，纯文本 Prompt）
    │
-   ▼ HTTP
+   ▼ HTTP Authorization: Bearer <effectiveKey>
 DeepSeek API (api.deepseek.com/v1/chat/completions)
    │
    ▼
-解析 JSON → 校验 → 返回结构化结果
+解析 JSON → 前端 stripMarkdown 去符号 → 纯文本结果
+无 Key / 调用失败 → 内置规则引擎兜底（source 标记来源）
 ```
 
 ---
@@ -2356,7 +2407,7 @@ DeepSeek API (api.deepseek.com/v1/chat/completions)
 | 首页 | Home | 统计卡片、热门社区帖子、即将到期提醒、我的宠物卡片 |
 | 宠物档案 | PetProfile | 宠物列表 → 详情（疫苗时间轴、驱虫、体检、就医记录 Tab） |
 | 健康记录 | HealthRecord | 新增记录表单 + ECharts 趋势图（体重/体温/食量/运动） |
-| AI 健康助手 | AIDiagnosis | 症状输入 → AI 诊断结果卡片（可能原因/建议/危险信号） |
+| AI 健康助手 | AIDiagnosis | 症状输入 → AI 诊断结果卡片（纯文本）；"设置 API Key"弹窗（localStorage 保存/清除，掩码显示） |
 | 社区 | Community | 帖子列表（分类 Tab + 热门榜 + 标签筛选） → 帖子详情（回复 + 嵌套评论 + 点赞） |
 | 营养助手 | Nutrition | 选宠物 → RER/MER 每日能量 + 喂食克数 + BCS 体重管理 + 体重趋势图 |
 | 提醒中心 | Reminder | 所有提醒列表 + 创建自定义提醒 + 疫苗/驱虫到期自动提醒 |
@@ -2440,6 +2491,8 @@ DeepSeek API (api.deepseek.com/v1/chat/completions)
 │  │                                                          ││
 │  └─────────────────────────────────────────────────────────┘│
 │  持续时间: [1天 ▼]   [🔍 开始 AI 诊断]                       │
+│  DeepSeek Key：sk-****f00a        [⚙ 设置 API Key]           │
+│  （Key 仅存本浏览器；未配置时弹窗引导，可跳过走内置规则）         │
 │                                                             │
 │  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ │
 │                                                             │
@@ -2879,6 +2932,8 @@ function renderSampleTrendChart(dom) {
 }
 
 // ===================== AI 诊断 =====================
+// 说明（实际实现）：Key 从 localStorage('pethealth:llm-api-key') 读取，
+// 未配置时弹窗引导（可跳过走规则引擎）；返回 LLM 文本需 stripMarkdown() 去符号。
 async function submitDiagnosis() {
     const petId = document.getElementById('diag-pet-select')?.value || '';
     const symptoms = document.getElementById('diag-symptoms')?.value || '';
@@ -2890,13 +2945,15 @@ async function submitDiagnosis() {
         return;
     }
 
-    resultBox.innerHTML = '<p class="loading">🤖 AI 正在分析中...</p>';
+    resultBox.innerHTML = '<p class="loading">🤖 AI 正在分析中（约 5~30 秒，请勿重复点击）...</p>';
 
     try {
+        const llmKey = localStorage.getItem('pethealth:llm-api-key') || '';
+        const headers = llmKey ? { 'X-LLM-Api-Key': llmKey } : null;
         const data = await apiPost('/api/ai-diagnosis', {
             petId, species: 'CAT', breed: '英短', ageMonths: 18,
             symptoms, duration
-        });
+        }, headers);
         // 后端返回的可能是 JSON 字符串（AI 返回），需要解析
         const parsed = typeof data === 'string' ? JSON.parse(data) : data;
 
@@ -2911,7 +2968,7 @@ async function submitDiagnosis() {
             </div>
         `;
     } catch (e) {
-        resultBox.innerHTML = `<p class="empty-hint">AI 调用失败：${e.message} —— 检查 LLM_API_KEY 是否配置</p>`;
+        resultBox.innerHTML = `<p class="empty-hint">AI 调用失败：${e.message}</p>`;
     }
 }
 
@@ -3536,15 +3593,19 @@ dubbo:
   registry:
     address: N/A
   provider:
-    timeout: 10000
+    # AI 诊断为同步等待 DeepSeek（HTTP readTimeout 60s），需放大到 65s；
+    # 其余接口由 consumer 端 timeout=5000 先生效
+    timeout: 65000
     retries: 0
   qos:
     enable: false
 
 # DeepSeek AI 配置
+# api-key 默认留空，仓库不含真实 Key：本地使用时由前端"设置 API Key"弹窗输入
+# （经 X-LLM-Api-Key 请求头透传）；服务器部署时可用环境变量 LLM_API_KEY 兜底
 llm:
   api-url: ${LLM_API_URL:https://api.deepseek.com/v1/chat/completions}
-  api-key: ${LLM_API_KEY:your-api-key-here}
+  api-key: ${LLM_API_KEY:}
   model: ${LLM_MODEL:deepseek-v4-flash}
   max-tokens: 4096
   temperature: 0.7
@@ -3656,7 +3717,7 @@ management:
 ### 11.7 环境变量速查
 
 ```bash
-# LLM
+# LLM（可选）：不设也行——本地由前端弹窗输入 Key；设置后作为服务端兜底 Key
 export LLM_API_KEY=sk-xxx
 export LLM_MODEL=deepseek-v4-flash
 
@@ -3722,8 +3783,9 @@ redis-server
 
 # ====== 4. 无需 Nacos（Dubbo 采用直连模式，见 2.4）======
 
-# ====== 5. 导入环境变量（同一 PowerShell 会话内生效）======
-$env:LLM_API_KEY = "sk-your-key-here"
+# ====== 5. LLM_API_KEY 可不设置：前端"设置 API Key"弹窗输入即可 ======
+# 仅当希望服务端统一兜底时才设置（优先级低于前端传入的 Key）
+$env:LLM_API_KEY = "sk-your-key-here"   # 可跳过
 $env:LLM_MODEL   = "deepseek-v4-flash"
 # 提醒为应用内触达，无需 SMTP 邮件配置
 ```
@@ -4010,10 +4072,11 @@ dubbo:
 server-tuning:
   max-http-header-size: 8192
 
+# Key 可留空走前端弹窗注入；服务端环境变量仅作兜底
 llm:
   api-url: https://api.deepseek.com/v1/chat/completions
   api-key: ${LLM_API_KEY:}
-  model: deepseek-v4-pro
+  model: deepseek-v4-flash
   max-tokens: 2048
   temperature: 0.7
 
@@ -4049,6 +4112,7 @@ WorkingDirectory=/opt/pethealth
 
 # ===== 环境变量（敏感信息通过环境变量注入，不要硬编码到 jar 里）=====
 Environment="SPRING_PROFILES_ACTIVE=ecs"
+# ===== LLM（可选）：不配也能用——用户在前端弹窗输入自己的 Key；配置后仅作服务端兜底 =====
 Environment="LLM_API_KEY=sk-your-actual-api-key-here"
 Environment="MONGO_USER=pethealth_app"
 Environment="MONGO_PASS=ChangeMe_Use_Strong_Password_123!"
@@ -4297,11 +4361,16 @@ crontab -e
 
 ### Phase 2 — AI 健康助手（1 天）
 
+> ✅ **已实现（与下方早期计划的差异）**：无独立 `LLMClient`，真实实现为
+> `AIDiagnosisDubboServiceImpl`（Dubbo Provider，见 9.1.1）；web 端 `AIDiagnosisController`
+> 透传前端请求头 `X-LLM-Api-Key`。Key 无需写在配置里——前端弹窗输入即可；
+> 未配置时不抛异常，自动降级内置规则引擎。
+
 - [ ] 在 `health-record-service/` 下创建独立 Maven 模块（第 3.1 节目录结构）
-- [ ] 把第 9.2 节的 **完整 LLMClient.java** 复制进去，不需要改一行代码
-- [ ] 把第 10.6 节的 AI 诊断 UI 粘到 index.html 里，调用 `/api/ai-diagnosis`
-- [ ] 写 `AIDiagnosisController`，内部调 `LLMClient.diagnose(species, breed, ageMonths, symptoms, duration)`
-- [ ] **验证：** 输入"我家猫今天没精神，不爱动"，AI 返回可能原因 + 建议 + 危险信号（如果没配 LLM_API_KEY，会抛异常，检查日志）
+- [ ] ~~把第 9.2 节的 **完整 LLMClient.java** 复制进去~~ → 以实际 `AIDiagnosisDubboServiceImpl` 为准（9.2 仅设计参考）
+- [ ] 把第 10.6 节的 AI 诊断 UI 粘到 index.html 里，调用 `/api/ai-diagnosis`（另需"设置 API Key"弹窗 + localStorage）
+- [ ] 写 `AIDiagnosisController`，经 Dubbo 调 `diagnose(..., apiKey)`
+- [ ] **验证：** 输入"我家猫今天没精神，不爱动"，配置 Key 时约 5~30 秒返回纯文本 AI 分析；未配置 Key 时正常返回规则引擎结果（不报错）
 
 ### Phase 3 — Redis 统计缓存 + 热门榜（1 天）
 
@@ -4458,6 +4527,7 @@ db.pet_profiles.insertMany([
 ```
 
 > **说明**：以上为 `pethealth-web` 的关键依赖。`okhttp` / `fastjson2`（LLM HTTP 调用）位于 `health-record-service`，不属于 pethealth-web；项目**未使用** Zipkin / `micrometer-tracing-bridge-brave` 链路追踪，也无 `spring-boot-starter-amqp` / `spring-boot-starter-mail`。
+```xml
     <dependency>
         <groupId>io.zipkin.reporter2</groupId>
         <artifactId>zipkin-reporter-brave</artifactId>
@@ -4476,7 +4546,3 @@ db.pet_profiles.insertMany([
     </dependency>
 </dependencies>
 ```
-
----
-
-**🎉 文档结束。祝开发顺利！记得：先让单体跑起来（Phase 1），再拆微服务，这样你能最快看到效果。**

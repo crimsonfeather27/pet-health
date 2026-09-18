@@ -6,9 +6,9 @@
 
 - **宠物档案**：多宠物管理，支持疫苗、驱虫、体检等动态字段扩展
 - **健康记录**：体重 / 体温 / 饮食 / 运动量等指标记录，ECharts 趋势图表可视化
-- **提醒系统**：疫苗到期、驱虫、体检提醒，RabbitMQ 延迟队列 + 应用内通知 / 邮件
-- **AI 健康助手**：症状描述 → DeepSeek AI 初步诊断建议与就医指引
-- **宠物社区**：经验分享、问答互动、嵌套评论、点赞与 Redis 热门榜
+- **提醒系统**：疫苗到期、驱虫、体检提醒，定时调度 + `findAndModify` 原子抢占，应用内通知（无 MQ / 无邮件）
+- **AI 健康助手**：症状描述 → DeepSeek AI 初步诊断建议与就医指引；API Key 可在前端弹窗填写（仅存浏览器），未配置时自动降级内置规则引擎
+- **宠物社区**：经验分享、问答互动、回复、点赞与 Redis 热门榜
 - **营养助手**：基于 NRC / WSAVA 公式计算每日能量与喂食量，支持 BCS 体重管理
 
 ## 技术栈
@@ -20,10 +20,9 @@
 | 微服务 | Apache Dubbo | 3.2.4 |
 | 注册中心 | Nacos（可选） | 2.3.0 |
 | Spring Cloud | Spring Cloud | 2023.0.0 |
-| 数据库 | MongoDB | 6.x |
+| 数据库 | MongoDB | 8.x |
 | 缓存 | Redis | - |
-| 消息队列 | RabbitMQ | - |
-| AI | DeepSeek LLM API | - |
+| AI | DeepSeek LLM API（Key 由前端按请求透传，服务端不内置） | - |
 | 前端 | HTML + CSS + JavaScript（ECharts） | - |
 | 构建 | Maven | - |
 
@@ -47,6 +46,7 @@ pet-health
 ├── pom.xml                        # 父 POM（统一依赖版本）
 ├── microservices/                 # 微服务父 POM
 │   └── pom.xml
+├── pethealth-api/                 # 共享模块（实体 / Dubbo 接口 / ApiResponse）
 ├── pet-service/                   # 宠物档案服务
 ├── health-record-service/         # 健康记录 / AI 诊断服务
 ├── reminder-service/              # 提醒服务
@@ -60,14 +60,14 @@ pet-health
 
 - JDK 17+
 - Maven 3.6+
-- MongoDB 6.x（默认端口 27017，库 `pethealth_web`）
+- MongoDB 8.x（默认端口 27017，库 `pethealth_web`）
 - Redis（默认端口 6379）
-- RabbitMQ（可选，默认 guest/guest，可通过 `RABBITMQ_ENABLED=false` 关闭降级运行）
+- 无需 RabbitMQ / Nacos（Dubbo 采用直连模式；提醒为应用内定时调度）
 
 ## 快速开始
 
-1. 启动基础设施：MongoDB、Redis，可选 RabbitMQ。
-2. 在项目根目录编译安装基础依赖：
+1. 启动基础设施：MongoDB、Redis。
+2. 在项目根目录编译安装基础依赖（含 pethealth-api 共享模块）：
 
    ```bash
    mvn clean install -DskipTests
@@ -95,11 +95,16 @@ pet-health
 
 | 环境变量 | 说明 | 默认值 |
 |----------|------|--------|
-| `LLM_API_KEY` | DeepSeek API Key（AI 诊断） | 空 |
-| `LLM_MODEL` | LLM 模型名 | `deepseek-chat` |
-| `RABBITMQ_ENABLED` | 是否启用 RabbitMQ | `false` |
+| `LLM_API_KEY` | DeepSeek API Key（可选；不设置时可在前端"设置 API Key"弹窗输入，均无则走内置规则引擎） | 空 |
+| `LLM_MODEL` | LLM 模型名 | `deepseek-v4-flash` |
 | `DUBBO_ENABLED` | 是否启用 Dubbo 远程调用 | `true` |
-| `SMTP_HOST` / `SMTP_USER` / `SMTP_PASSWORD` | 邮件提醒 SMTP 配置 | 空 |
+
+> **AI Key 的两种提供方式**（优先级：请求头 ＞ 环境变量 ＞ 规则引擎）：
+> 1. 前端方式（推荐用于本地/演示）：页面"AI 健康助手 → 设置 API Key"输入，仅保存在浏览器
+>    localStorage（键 `pethealth:llm-api-key`），经请求头 `X-LLM-Api-Key` 透传，仓库与服务端均不存储；
+> 2. 服务端方式（部署兜底）：设置环境变量 `LLM_API_KEY`。
+>
+> dev 环境内置测试账号：`demo / 123456`、`admin / admin123`。
 
 ## 详细文档
 
