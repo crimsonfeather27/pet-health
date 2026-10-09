@@ -25,7 +25,12 @@
 | 数据库 | MongoDB | 8.x |
 | 缓存 | Redis | - |
 | AI | DeepSeek LLM API（Key 由前端按请求透传，服务端不内置） | - |
-| 前端 | HTML + CSS + JavaScript（ECharts） | - |
+| **前端框架** | **Vue 3 + Vite + TypeScript** | **3.5.13 + 6.0.5 + 5.6.3** |
+| **状态管理** | **Pinia** | **2.3.0** |
+| **路由** | **Vue Router** | **4.5.0** |
+| **HTTP 客户端** | **Axios** | **1.7.9** |
+| **图表** | **ECharts + vue-echarts** | **5.5.1 + 7.0.3** |
+| **图标** | **lucide-vue-next** | **0.469.0** |
 | 构建 | Maven | - |
 
 ## 系统架构
@@ -53,7 +58,20 @@ pet-health
 ├── health-record-service/         # 健康记录 / AI 诊断服务
 ├── reminder-service/              # 提醒服务
 ├── pethealth-web/                 # Web 应用（前端 + 业务聚合）
-│   └── src/main/resources/static/ # 前端页面（index.html / styles.css / script.js）
+│   ├── frontend/                  # Vue 3 前端源码（独立 Vite 项目）
+│   │   ├── package.json
+│   │   ├── vite.config.ts         # Vite 配置：dev 代理 /api→8080，build 输出到后端 static
+│   │   └── src/
+│   │       ├── main.ts            # Vue 入口：createApp + Pinia + Router
+│   │       ├── App.vue            # 根组件：导航栏 + RouterView + 登录/注册 Modal
+│   │       ├── api/index.ts       # axios 封装（withCredentials + ApiResponse 拦截）
+│   │       ├── router/index.ts    # Vue Router（hash 模式，9 条路由）
+│   │       ├── stores/            # Pinia 状态（user.ts / pets.ts）
+│   │       ├── composables/       # 组合式函数（useUnreadBadge）
+│   │       ├── styles/global.css  # 全局样式（CSS 变量 + 通用类）
+│   │       ├── components/        # 共享组件（AppChart / AppToast / PostFormModal / ProfileModal）
+│   │       └── views/             # 9 个视图（HomeView / PetsView / HealthRecordsView / ...）
+│   └── src/main/resources/static/ # Vite 构建产物输出目录（index.html + assets/）
 ├── PETHEALTH_DESIGN.md            # 完整项目设计文档
 └── cankao.md
 ```
@@ -62,11 +80,16 @@ pet-health
 
 - JDK 17+
 - Maven 3.6+
+- Node.js 18+（仅前端开发需要，生产构建已内嵌到 Maven 流程）
 - MongoDB 8.x（默认端口 27017，库 `pethealth_web`）
 - Redis（默认端口 6379）
 - 无需 RabbitMQ / Nacos（Dubbo 采用直连模式；提醒为应用内定时调度）
 
 ## 快速开始
+
+### 方式一：生产模式（推荐）
+
+前端已预构建并打包进 `pethealth-web`，直接启动后端即可：
 
 1. 启动基础设施：MongoDB、Redis。
 2. 在项目根目录编译安装基础依赖（含 pethealth-api 共享模块）：
@@ -92,6 +115,24 @@ pet-health
    ```
 
 4. 浏览器访问 <http://localhost:8080>。
+
+### 方式二：开发模式（前后端分离热更新）
+
+如需修改前端代码并实时预览：
+
+1. 启动基础设施：MongoDB、Redis。
+2. 启动后端微服务（同上，web 最后启动）。
+3. 启动前端开发服务器（端口 5173，自动代理 `/api` 到 8080）：
+
+   ```bash
+   cd pethealth-web/frontend
+   npm install
+   npm run dev
+   ```
+
+4. 浏览器访问 <http://localhost:5173>。
+
+> 修改前端后如需更新生产构建，运行 `npm run build`（输出到 `pethealth-web/src/main/resources/static/`），然后重新打包或重启 `pethealth-web`。
 
 ## 配置说明
 
