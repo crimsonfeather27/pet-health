@@ -123,11 +123,7 @@ main {
     margin: 2.5rem auto;
     padding: 0 2rem;
 }
-main > section { display: none; }
-main > section.active {
-    display: block;
-    animation: fadeSlideUp 0.55s cubic-bezier(0.16, 1, 0.3, 1);
-}
+main > section { display: block; }
 section h2 {
     font-size: 1.7rem;
     font-weight: 300;
@@ -1223,7 +1219,7 @@ section h2 {
 .hero-desc {
     font-size: 1rem;
     color: var(--text-muted);
-    max-width: 540px;
+    max-width: 600px;
     margin: 0 auto 1.8rem;
     line-height: 1.7;
 }

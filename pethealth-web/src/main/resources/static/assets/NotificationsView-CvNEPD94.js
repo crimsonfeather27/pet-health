@@ -1,0 +1,16 @@
+import{d as R,m as N,o as T,a,c as n,b as s,f as u,u as l,g as _,F as B,r as E,y as x,n as D,p as V,t as f,h as $,q as L,i as h,C as y,T as k,A as i,E as S,l as A,_ as U}from"./index-hm7VZXu3.js";import{B as z}from"./bell-Qzxmpr7i.js";import{c as p}from"./createLucideIcon-CRj56rl9.js";import{T as P}from"./target-CNZRYpYs.js";import{M as F}from"./message-circle-B8GWuNoG.js";/**
+ * @license lucide-vue-next v0.469.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */const X=p("ClockIcon",[["circle",{cx:"12",cy:"12",r:"10",key:"1mglay"}],["polyline",{points:"12 6 12 12 16 14",key:"68esgv"}]]);/**
+ * @license lucide-vue-next v0.469.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */const v=p("MegaphoneIcon",[["path",{d:"m3 11 18-5v12L3 14v-3z",key:"n962bs"}],["path",{d:"M11.6 16.8a3 3 0 1 1-5.8-1.6",key:"1yl0tm"}]]);/**
+ * @license lucide-vue-next v0.469.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */const Y=p("XIcon",[["path",{d:"M18 6 6 18",key:"1bl5f8"}],["path",{d:"m6 6 12 12",key:"d8bk6v"}]]),q={id:"notifications"},G={class:"section-header-row"},j={key:0,class:"empty-hint"},H={key:1,class:"empty-hint"},J={key:2},K=["onClick"],O={class:"notif-icon"},Q={class:"notif-body"},W={class:"notif-title"},Z={key:0,class:"notif-dot"},ee={class:"notif-content"},te={class:"notif-time"},oe=["onClick"],se=R({__name:"NotificationsView",setup(ae){const m=N(),c=h([]),r=h(!0),g={REPLY:F,ACCEPT:P,REMINDER:X,SYSTEM:v};function w(o){return o?new Date(o).toLocaleString("zh-CN"):""}async function d(){var t;r.value=!0;const o=((t=m.currentUser)==null?void 0:t.id)||"demo";try{const e=await A(`/api/notifications?ownerId=${o}`);c.value=e||[]}catch(e){i("消息加载失败："+e.message,"error")}finally{r.value=!1}k()}async function C(o){try{await y(`/api/notifications/${o}/read`,{});const t=c.value.find(e=>e.id===o);t&&(t.isRead=!0),k()}catch(t){i("操作失败："+t.message,"error")}}async function M(o){if(confirm("确认删除这条通知？"))try{await S(`/api/notifications/${o}`),i("通知已删除"),await d()}catch(t){i("删除失败："+t.message,"error")}}async function I(){var t;const o=(t=m.currentUser)==null?void 0:t.id;if(o)try{await y(`/api/notifications/read-all?ownerId=${o}`,{}),i("已全部标记为已读"),await d()}catch(e){i("操作失败："+e.message,"error")}}return T(d),(o,t)=>(a(),n("section",q,[s("div",G,[s("h2",null,[u(l(z)),t[0]||(t[0]=_(" 消息通知",-1))]),s("button",{class:"btn btn-secondary",onClick:I},"全部已读")]),r.value?(a(),n("div",j,"加载中…")):c.value.length?(a(),n("div",J,[(a(!0),n(B,null,E(c.value,e=>(a(),n("div",{key:e.id,class:x(["notif-item",e.isRead?"notif-read":"notif-unread"]),onClick:b=>!e.isRead&&C(e.id)},[s("span",O,[(a(),D(V(g[e.type||""]||l(v))))]),s("div",Q,[s("p",W,[_(f(e.title||"")+" ",1),e.isRead?$("",!0):(a(),n("span",Z,"●"))]),s("p",ee,f(e.content||""),1),s("p",te,f(w(e.createdAt)),1)]),s("button",{class:"notif-delete",title:"删除",onClick:L(b=>M(e.id),["stop"])},[u(l(Y))],8,oe)],10,K))),128))])):(a(),n("div",H,"暂无消息通知"))]))}}),le=U(se,[["__scopeId","data-v-3ec47913"]]);export{le as default};

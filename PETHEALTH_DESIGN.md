@@ -81,13 +81,18 @@
 | AI 调用 | JDK HttpURLConnection + DeepSeek API | - | AI 健康诊断（无第三方 HTTP 客户端依赖） |
 | JSON | FastJSON2 | 2.0.41 | JSON 处理 |
 | Lombok | Lombok | - | 简化 POJO |
-| 前端 | 原生 HTML + CSS + JS | - | 单页应用 |
-| 图表 | ECharts | 5.4.3 | 健康趋势图 |
-| 图标 | Lucide Icons | UMD 1.47.0 | 前端图标 |
+| 前端框架 | Vue 3 + Vite + TypeScript | 3.5.13 + 6.0.5 + 5.6.3 | Vue3 单页应用（`<script setup>` + Composition API） |
+| 状态管理 | Pinia | 2.3.0 | 全局状态（user / pets store） |
+| 路由 | Vue Router | 4.5.0 | hash 模式，兼容 Spring Boot 静态托管 |
+| HTTP 客户端 | Axios | 1.7.9 | 替代原 `fetch`，`withCredentials: true` 携带 Cookie |
+| 图表 | ECharts + vue-echarts | 5.5.1 + 7.0.3 | 健康趋势图（组件化封装 AppChart） |
+| 图标 | lucide-vue-next | 0.469.0 | Lucide 图标组件（`<LucideIcon :size="18"/>`） |
 | 安全 | Spring Security | 6.x | BCrypt 密码加密 + 认证 |
 | 构建 | Maven | 3.9+ | 多模块构建 |
 
-### 1.2 依赖版本锁（pom.xml 片段）
+### 1.2 依赖版本锁（pom.xml + package.json 片段）
+
+**后端（Maven pom.xml）：**
 
 ```xml
 <parent>
@@ -104,6 +109,28 @@
 </properties>
 ```
 
+**前端（package.json）：**
+
+```json
+{
+  "dependencies": {
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0",
+    "pinia": "^2.3.0",
+    "axios": "^1.7.9",
+    "echarts": "^5.5.1",
+    "vue-echarts": "^7.0.3",
+    "lucide-vue-next": "^0.469.0"
+  },
+  "devDependencies": {
+    "vite": "^6.0.5",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "typescript": "~5.6.3",
+    "vue-tsc": "^2.2.0"
+  }
+}
+```
+
 ---
 
 ## 2. 系统架构设计
@@ -113,10 +140,12 @@
 ```
                        ┌──────────────────────────────┐
                        │         前端 (浏览器)          │
-                       │  index.html + script.js + CSS │
-                       │  ECharts 图表  Lucide 图标     │
+                       │  Vue 3 SPA + Vite + TS        │
+                       │  Vue Router (hash 模式)        │
+                       │  Pinia 状态管理                │
+                       │  vue-echarts 图表  Lucide 图标 │
                        └──────────────┬───────────────┘
-                                      │ HTTP/JSON
+                                      │ HTTP/JSON (axios)
                                       ▼
 ┌────────────────────────────────────────────────────────────┐
 │                   pethealth-web (单体)                     │
@@ -262,13 +291,48 @@ pethealth/                                          ← 项目根目录
 │       │   └── PetHealthWebApplication.java
 │       └── resources/
 │           ├── application.yml
-│           └── static/
-│               ├── index.html
-│               ├── script.js
-│               ├── styles.css
-│               └── lib/                                ← 前端第三方库本地化（不走 CDN）
-│                   ├── echarts.min.js                   ← ECharts 5.4.3
-│                   └── lucide.min.js                   ← Lucide UMD 1.47.0
+│           └── static/                                ← Vite 构建产物输出目录（由 Vue 前端生成）
+│               ├── index.html                         ← Vite 构建后的入口 HTML（引用 chunk JS/CSS）
+│               └── assets/                            ← Vite 打包后的 JS/CSS chunk（含哈希名）
+│                   ├── index-[hash].js
+│                   ├── index-[hash].css
+│                   ├── PetsView-[hash].js
+│                   ├── HealthRecordsView-[hash].js
+│                   ├── CommunityView-[hash].js
+│                   ├── HomeView-[hash].js
+│                   └── ...                            ← 各视图组件 chunk + Lucide 图标 chunk
+│
+├── pethealth-web/frontend/                            ← Vue 3 前端源码目录（独立 Vite 项目）
+│   ├── package.json
+│   ├── vite.config.ts                                 ← Vite 配置：dev 代理 /api→8080，build 输出到后端 static
+│   ├── tsconfig.json
+│   └── src/
+│       ├── main.ts                                    ← Vue 入口：createApp + Pinia + Router
+│       ├── App.vue                                    ← 根组件：导航栏 + RouterView + 登录/注册 Modal
+│       ├── api/index.ts                               ← axios 封装（withCredentials + ApiResponse 拦截）
+│       ├── router/index.ts                            ← Vue Router（hash 模式，9 条路由）
+│       ├── stores/
+│       │   ├── user.ts                                ← 用户状态（login/register/logout/fetchMe）
+│       │   └── pets.ts                                ← 宠物缓存（loadPets/refreshPet/clear）
+│       ├── composables/
+│       │   └── useUnreadBadge.ts                      ← 未读消息徽标（跨组件共享）
+│       ├── styles/
+│       │   └── global.css                             ← 全局样式（CSS 变量 + 通用类）
+│       ├── components/
+│       │   ├── AppToast.vue                           ← Toast 消息提示组件
+│       │   ├── AppChart.vue                           ← vue-echarts 封装组件
+│       │   ├── PostFormModal.vue                      ← 帖子表单（新建/编辑复用）
+│       │   └── ProfileModal.vue                       ← 个人中心（头像上传/资料编辑）
+│       └── views/
+│           ├── HomeView.vue                           ← 首页（Hero + 功能入口 + 热门帖子 + 到期提醒）
+│           ├── PetsView.vue                           ← 宠物档案（列表 + 表单 + 详情弹窗 + 记录时间轴）
+│           ├── HealthRecordsView.vue                  ← 健康记录（统计摘要 + ECharts 趋势图 + 记录 CRUD）
+│           ├── AiDiagnosisView.vue                    ← AI 诊断（DeepSeek Key 管理 + 双引擎结果渲染）
+│           ├── CommunityView.vue                      ← 宠物社区（帖子列表 + 详情 + 回复 + 点赞 + 删帖）
+│           ├── NutritionView.vue                      ← 营养助手（RER/MER 计算 + 喂食量 + BCS 管理）
+│           ├── RemindersView.vue                      ← 提醒中心（列表 + 创建/编辑/删除提醒）
+│           ├── NotificationsView.vue                  ← 消息通知（列表 + 已读/删除）
+│           └── MyPostsView.vue                        ← 我的帖子（按用户过滤 + 发布新帖）
 │
 ├── pethealth-api/                                      ← 共享 API 模块（Dubbo 接口 + 公共实体）
 │   ├── pom.xml
@@ -922,8 +986,8 @@ public class SecurityConfig {
             .csrf(csrf -> csrf.disable())                       // 禁用 CSRF（前后端分离）
             .cors(cors -> cors.configure(http))                // 允许跨域
             .authorizeRequests(authorize -> authorize
-                // 静态资源
-                .requestMatchers("/", "/index.html", "/styles.css", "/script.js").permitAll()
+                // 静态资源（Vite 构建产物：index.html + assets/ 目录下的 chunk）
+                .requestMatchers("/", "/index.html", "/assets/**").permitAll()
                 // 所有 API 暂时放开
                 .requestMatchers("/api/**").permitAll()
                 // Actuator
@@ -2069,24 +2133,25 @@ DeepSeek API (api.deepseek.com/v1/chat/completions)
 
 ### 9.1 页面列表（完整对应导航栏）
 
-| 导航 | 页面 | 核心内容 |
-|------|------|----------|
-| 首页 | Home | 统计卡片、热门社区帖子、即将到期提醒、我的宠物卡片 |
-| 宠物档案 | PetProfile | 宠物列表 → 详情（疫苗时间轴、驱虫、体检、就医记录 Tab） |
-| 健康记录 | HealthRecord | 新增记录表单 + ECharts 趋势图（体重/体温/食量/运动） |
-| AI 健康助手 | AIDiagnosis | 症状输入 → AI 诊断结果卡片（纯文本）；"设置 API Key"弹窗（localStorage 保存/清除，掩码显示） |
-| 社区 | Community | 帖子列表（分类 Tab + 热门榜 + 标签筛选） → 帖子详情（回复 + 嵌套评论 + 点赞） |
-| 营养助手 | Nutrition | 选宠物 → RER/MER 每日能量 + 喂食克数 + BCS 体重管理 + 体重趋势图 |
-| 提醒中心 | Reminder | 所有提醒列表 + 创建自定义提醒 + 疫苗/驱虫到期自动提醒 |
-| 统计 | Statistics | 个人 Dashboard（宠物数、本周打卡、健康数据趋势） |
+| 导航 | 页面（Vue 视图） | 核心内容 |
+|------|------------------|----------|
+| 首页 | HomeView | Hero 品牌区 + 核心功能入口 + 热门社区帖子 + 即将到期提醒 |
+| 宠物档案 | PetsView | 宠物卡片列表 → 详情弹窗（疫苗/驱虫/体检/就医记录 Tab 时间轴 + 表单） |
+| 健康记录 | HealthRecordsView | 统计摘要卡片 + ECharts 多系列趋势图 + 记录明细列表 + 新增/编辑表单 |
+| AI 健康助手 | AiDiagnosisView | 症状输入 → 规则引擎 + LLM 双结果渲染；DeepSeek Key 弹窗（localStorage + 掩码） |
+| 宠物社区 | CommunityView | 帖子列表（分类/热门/标签筛选） → 帖子详情（回复 + 点赞 + 采纳 + 删帖） |
+| 营养助手 | NutritionView | 选宠物 → RER/MER 每日能量 + 喂食克数 + BCS 体重管理 |
+| 提醒中心 | RemindersView | 所有提醒列表 + 创建/编辑/删除自定义提醒 |
+| 消息通知 | NotificationsView | 消息列表 + 标记已读 + 删除通知 |
+| 我的帖子 | MyPostsView | 当前用户帖子列表 + 发布新帖（复用 PostFormModal） |
 
 ### 9.2 UI 风格
 
-- **主色调**：深海军蓝 `#3873B6`（主色）+ 天蓝 `#6DA1D8`（强调/链接），页面浅灰底 `#F5F7FA`；状态徽章用统一的浅色系（浅黄/浅绿/浅蓝/浅红/浅灰），详见 styles.css 顶部 CSS 变量
-- **卡片风格**：圆角 12px + 浅阴影 + 悬停微动画，配合 `card-glow` / `card-shine` 风格类使用（完整 CSS 见 9.7 节）
-- **图标**：Lucide Icons，`data-lucide="paw-print"` / `heart-pulse` / `thermometer` / `calendar-bell` 等
-- **图表库**：ECharts 5.4.3
-- **字体**：系统默认 + 中文友好
+- **主色调**：深海军蓝 `#3873B6`（主色）+ 天蓝 `#6DA1D8`（强调/链接），页面浅灰底 `#F5F7FA`；状态徽章用统一的浅色系（浅黄/浅绿/浅蓝/浅红/浅灰），详见 global.css 顶部 CSS 变量
+- **卡片风格**：圆角 16px + 浅阴影 + 悬停微动画，配合 `card-glow` 风格类使用
+- **图标**：lucide-vue-next 组件化图标（`<component :is="LucideIcon" :size="18"/>`），替代原 UMD 版 `data-lucide` 属性
+- **图表库**：ECharts 5.5.1 + vue-echarts 7.0.3（组件化封装 AppChart.vue）
+- **字体**：Logo 用 Instrument Serif（Google Fonts），正文用 Helvetica Neue / PingFang SC 系统栈
 
 ### 9.3 关键页面 Mockup 描述
 
@@ -2242,512 +2307,196 @@ DeepSeek API (api.deepseek.com/v1/chat/completions)
 
 ### 9.4 前端技术约定
 
-与上文 9.5-9.8 节的 `card-glow` / `card-shine` 等 CSS 类直接对应，风格类名在 styles.css 中已有完整定义。
+与上文 9.5-9.8 节的 `card-glow` 等 CSS 类直接对应，风格类名在 global.css 中已有完整定义。
 
 | 约定 | 说明 |
 |------|------|
-| 图标 | `<script src="lib/lucide.min.js"></script>`（本地，非 CDN）+ `data-lucide="heart-pulse"` |
-| 图表 | `echarts.init(dom)` + `chart.setOption({...})`（库文件本地 `lib/echarts.min.js`） |
-| API 调用 | `fetch('/api/xxx').then(r => r.json())` |
-| 页面切换 | 单页应用，CSS class `section.active` 控制显示/隐藏 |
-| 主题色 CSS 变量 | `--primary: #FF8C42; --success: #4CAF50; --info: #4A90D9;` |
-| 卡片类 | `.card-glow` `.card-shine` `.white-line-top`（完整定义见 9.7 节 styles.css） |
+| 图标 | lucide-vue-next 组件化图标（`<component :is="LucideIcon" :size="18"/>`），替代原 UMD 版 `data-lucide` 属性 |
+| 图表 | vue-echarts 组件化封装 AppChart.vue（`<AppChart :option="chartOption"/>`），替代原 `echarts.init(dom)` |
+| API 调用 | axios 封装（`apiGet/apiPost/apiPut/apiDelete`），`withCredentials: true` 携带 Cookie，响应拦截器处理 `{code, message, data}` |
+| 页面切换 | Vue Router（hash 模式），`<RouterView>` + `<Transition>` 过渡动画，替代原 `showSection()` 手动切换 |
+| 状态管理 | Pinia store（user.ts / pets.ts），替代原全局 `AppState` 对象 |
+| 主题色 CSS 变量 | `--primary: #3873B6; --accent: #6DA1D8; --bg: #F5F7FA;`（详见 global.css） |
+| 卡片类 | `.card-glow`（完整定义见 9.7 节 global.css） |
 
-### 9.5 导航栏 HTML 模板
+### 9.5 导航栏模板（App.vue）
 
-```html
-<header>
+导航栏在 Vue3 中作为根组件 `App.vue` 的一部分，使用 Vue Router 的 `<RouterLink>` 实现导航高亮：
+
+```vue
+<template>
+  <header>
     <div class="header-container">
-        <div class="logo">
-            <h1> PetHealth</h1>
-            <span class="tagline">宠物健康管家</span>
+      <div class="logo">
+        <h1>PetHealth</h1>
+      </div>
+      <nav>
+        <ul>
+          <li v-for="item in navItems" :key="item.to">
+            <RouterLink :to="item.to" active-class="active" class="nav-link">
+              {{ item.label }}
+            </RouterLink>
+          </li>
+        </ul>
+      </nav>
+      <div id="user-section">
+        <template v-if="!user.isLoggedIn">
+          <button class="btn btn-secondary" @click="openLogin">登录</button>
+          <button class="btn btn-primary" @click="openRegister">注册</button>
+        </template>
+        <div v-else class="user-dropdown">
+          <div class="user-profile-entry" @click="toggleDropdown">
+            <img v-if="avatarUrl" class="user-avatar" :src="avatarUrl" alt="头像" />
+            <span v-else class="user-avatar user-avatar-fallback">{{ avatarLetter }}</span>
+            <span class="user-welcome">{{ user.currentUser?.username }}</span>
+            <span class="user-caret">▾</span>
+          </div>
+          <div v-show="dropdownOpen" class="user-dropdown-menu">
+            <div class="user-dropdown-item" @click="goProfile">我的信息</div>
+            <div class="user-dropdown-item" @click="goMyPosts">我的帖子</div>
+            <div class="user-dropdown-item" @click="goNotifications">
+              消息 <span v-if="unreadCount > 0" class="notif-badge">{{ unreadCount }}</span>
+            </div>
+            <div class="user-dropdown-item user-dropdown-item-danger" @click="onLogout">退出</div>
+          </div>
         </div>
-        <nav>
-            <ul>
-                <li><a href="#home" class="nav-link" onclick="showSection('home')">首页</a></li>
-                <li><a href="#pets" class="nav-link" onclick="showSection('pets')">宠物档案</a></li>
-                <li><a href="#health-records" class="nav-link" onclick="showSection('health-records')">健康记录</a></li>
-                <li><a href="#ai-diagnosis" class="nav-link" onclick="showSection('ai-diagnosis')">AI 健康助手</a></li>
-                <li><a href="#community" class="nav-link" onclick="showSection('community')">宠物社区</a></li>
-                <li><a href="#nutrition" class="nav-link" onclick="showSection('nutrition')">营养助手</a></li>
-                <li><a href="#reminders" class="nav-link" onclick="showSection('reminders')">提醒中心</a></li>
-                <li><a href="#statistics" class="nav-link" onclick="showSection('statistics')">统计</a></li>
-            </ul>
-        </nav>
-        <div id="user-section">
-            <button class="btn btn-secondary" onclick="showLoginModal()">登录</button>
-            <button class="btn btn-primary" onclick="showRegisterModal()">注册</button>
-        </div>
+      </div>
     </div>
-</header>
+  </header>
+
+  <main>
+    <RouterView v-slot="{ Component, route }">
+      <Transition name="section-fade" mode="out-in">
+        <component :is="Component" :key="route.path" />
+      </Transition>
+    </RouterView>
+  </main>
+</template>
 ```
 
-### 9.6 script.js 核心骨架
+### 9.6 核心入口与状态管理（main.ts + stores）
 
-**文件位置**: `pethealth-web/src/main/resources/static/script.js`
+**文件位置**: `pethealth-web/frontend/src/main.ts`
 
-下面是一个**能直接跑通**的单页应用骨架。包含：API 封装、页面切换、登录/注册、帖子 CRUD、热门榜渲染、ECharts 初始化模板。
+Vue3 入口文件，初始化 Pinia + Router，注册 401 处理：
 
-```javascript
-// ===================== 全局状态 =====================
-const AppState = {
-    currentSection: 'home',
-    currentUser: null,
-    petCache: [],
-    postCache: [],
-};
+```typescript
+import { createApp } from 'vue'
+import { createPinia } from 'pinia'
+import App from './App.vue'
+import router from './router'
+import { registerUnauthorizedHandler } from './api'
+import { useUserStore } from './stores/user'
+import './styles/global.css'
 
-// ===================== 通用 API 封装 =====================
-/**
- * 统一 fetch 封装，自动处理 ApiResponse 结构
- * 后端返回 { code: 200, message: "success", data: {...}, timestamp: ... }
- */
-async function api(method, url, body = null) {
-    const opts = {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-    };
-    if (body) opts.body = JSON.stringify(body);
+const app = createApp(App)
+const pinia = createPinia()
 
-    const res = await fetch(url, opts);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const json = await res.json();
-    if (json.code !== 200) throw new Error(json.message || '请求失败');
-    return json.data;
-}
-const apiGet    = (url)         => api('GET',    url);
-const apiPost   = (url, body)   => api('POST',   url, body);
-const apiPut    = (url, body)   => api('PUT',    url, body);
-const apiDelete = (url)         => api('DELETE', url);
+app.use(pinia)
+app.use(router)
 
-// ===================== 页面切换 =====================
-/**
- * 单页应用核心：把所有 section 默认隐藏，只显示指定 id 的那个
- * 同时更新导航栏 active 状态
- */
-function showSection(sectionId) {
-    // 1. 隐藏所有 section
-    document.querySelectorAll('main > section').forEach(s => s.classList.remove('active'));
-    // 2. 显示目标 section
-    const target = document.getElementById(sectionId);
-    if (target) target.classList.add('active');
-    // 3. 更新导航栏高亮
-    document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
-    const activeLink = document.querySelector(`.nav-link[href="#${sectionId}"]`);
-    if (activeLink) activeLink.classList.add('active');
+// 注册 401 处理：清登录态（对应原 script.js 中 res.status === 401 的逻辑）
+registerUnauthorizedHandler(() => {
+  const userStore = useUserStore()
+  userStore.clear()
+})
 
-    // 4. 切换时加载对应数据（懒加载）
-    AppState.currentSection = sectionId;
-    loadSectionData(sectionId);
-    // 5. 如果有 Lucide 图标，刷新
-    if (window.lucide) window.lucide.createIcons();
-}
-
-/** 各 section 数据懒加载入口 */
-async function loadSectionData(id) {
-    try {
-        switch (id) {
-            case 'home':        await loadHome(); break;
-            case 'pets':        await loadPets(); break;
-            case 'community':   await loadPosts(); break;
-            case 'ai-diagnosis': /* 静态页面，不需要预加载 */ break;
-            case 'health-records':  await loadHealthRecords(); break;
-            case 'nutrition':   await loadNutrition(); break;
-            case 'reminders':   await loadReminders(); break;
-            case 'statistics':  await loadStatistics(); break;
-        }
-    } catch (e) {
-        console.warn(`加载 ${id} 数据失败（可能后端未启动）:`, e);
-    }
-}
-
-// ===================== 首页加载 =====================
-async function loadHome() {
-    // 热门帖子（Redis Sorted Set）
-    try {
-        const hotPosts = await apiGet('/api/posts/hot?limit=5');
-        const container = document.getElementById('hot-posts-list');
-        if (container) container.innerHTML = hotPosts.map(p => `
-            <div class="hot-post-item" onclick="goToPost('${p.id}')">
-                <span class="hot-rank">🔥</span>
-                <span class="hot-title">${p.title}</span>
-                <span class="hot-meta">${p.replyCount || 0}回复</span>
-            </div>
-        `).join('');
-    } catch (e) { /* 后端未启动时显示占位符 */ }
-
-    // 即将到期提醒
-    try {
-        const dueReminders = await apiGet('/api/reminders/due?days=7');
-        const container = document.getElementById('due-reminders-list');
-        if (container && dueReminders.length > 0) {
-            container.innerHTML = dueReminders.map(r => `
-                <div class="reminder-item">
-                    <span class="reminder-icon">🔔</span>
-                    <span>${r.title} — 还有 ${r.daysLeft} 天</span>
-                </div>
-            `).join('');
-        }
-    } catch (e) { /* 忽略 */ }
-}
-
-// ===================== 登录注册（Modal） =====================
-function showLoginModal() {
-    const html = `
-        <div class="modal" id="login-modal">
-            <div class="modal-content">
-                <h3>🐾 登录 PetHealth</h3>
-                <div class="form-group">
-                    <label>用户名</label>
-                    <input id="login-username" type="text" placeholder="demo">
-                </div>
-                <div class="form-group">
-                    <label>密码</label>
-                    <input id="login-password" type="password" placeholder="123456">
-                </div>
-                <button class="btn btn-primary full-width" onclick="doLogin()">登录</button>
-                <p class="modal-hint">测试账号: demo / 123456</p>
-                <button class="modal-close" onclick="closeModal('login-modal')">✕</button>
-            </div>
-        </div>`;
-    openModal(html);
-}
-
-function showRegisterModal() {
-    const html = `
-        <div class="modal" id="register-modal">
-            <div class="modal-content">
-                <h3>🐾 注册 PetHealth</h3>
-                <div class="form-group">
-                    <label>用户名</label>
-                    <input id="reg-username" type="text" placeholder="你的昵称">
-                </div>
-                <div class="form-group">
-                    <label>邮箱</label>
-                    <input id="reg-email" type="email" placeholder="you@example.com">
-                </div>
-                <div class="form-group">
-                    <label>密码</label>
-                    <input id="reg-password" type="password" placeholder="至少 6 位">
-                </div>
-                <button class="btn btn-primary full-width" onclick="doRegister()">注册</button>
-                <button class="modal-close" onclick="closeModal('register-modal')">✕</button>
-            </div>
-        </div>`;
-    openModal(html);
-}
-
-function openModal(html) { document.body.insertAdjacentHTML('beforeend', html); }
-function closeModal(id)  { document.getElementById(id)?.remove(); }
-
-async function doLogin() {
-    const username = document.getElementById('login-username').value;
-    const password = document.getElementById('login-password').value;
-    try {
-        const user = await apiPost('/api/users/login', { username, password });
-        AppState.currentUser = user;
-        closeModal('login-modal');
-        updateUserSection();
-        showToast(`欢迎回来，${user.username}！`);
-    } catch (e) {
-        showToast(e.message, 'error');
-    }
-}
-
-async function doRegister() {
-    const username = document.getElementById('reg-username').value;
-    const email    = document.getElementById('reg-email').value;
-    const password = document.getElementById('reg-password').value;
-    try {
-        await apiPost('/api/users/register', { username, email, password });
-        closeModal('register-modal');
-        showToast('注册成功！请登录');
-        showLoginModal();
-    } catch (e) {
-        showToast(e.message, 'error');
-    }
-}
-
-function updateUserSection() {
-    const section = document.getElementById('user-section');
-    if (!AppState.currentUser) {
-        section.innerHTML = `
-            <button class="btn btn-secondary" onclick="showLoginModal()">登录</button>
-            <button class="btn btn-primary" onclick="showRegisterModal()">注册</button>`;
-    } else {
-        section.innerHTML = `
-            <span class="user-welcome">👋 ${AppState.currentUser.username}</span>
-            <button class="btn btn-secondary" onclick="doLogout()">退出</button>`;
-    }
-}
-
-function doLogout() {
-    AppState.currentUser = null;
-    updateUserSection();
-    showToast('已退出登录');
-}
-
-// ===================== 帖子列表 + 热门榜 =====================
-async function loadPosts() {
-    const container = document.getElementById('posts-container');
-    try {
-        const posts = await apiGet('/api/posts?page=0&size=20');
-        AppState.postCache = posts;
-        container.innerHTML = posts.map(p => `
-            <div class="post-card card-glow">
-                <div class="post-header">
-                    <span class="post-category">${p.category || 'GENERAL'}</span>
-                    <span class="post-author">by ${p.authorName}</span>
-                </div>
-                <h3 class="post-title">${p.title}</h3>
-                <p class="post-content">${truncate(p.content, 100)}</p>
-                <div class="post-meta">
-                    <span>👁 ${p.viewCount || 0}</span>
-                    <span>👍 ${p.likeCount || 0}</span>
-                    <span>💬 ${p.replyCount || 0}</span>
-                    <button class="btn-tiny" onclick="goToPost('${p.id}')">查看详情 →</button>
-                </div>
-            </div>
-        `).join('');
-    } catch (e) {
-        container.innerHTML = `<p class="empty-hint">💡 后端还没启动，或者还没有帖子 —— 你可以先启动后端试试</p>`;
-    }
-}
-
-async function goToPost(postId) {
-    // 切到社区并滚动
-    showSection('community');
-    // 展开详情（简化：直接弹窗显示）
-    try {
-        const post = await apiGet(`/api/posts/${postId}`);
-        const replies = await apiGet(`/api/replies/post/${postId}`);
-        alert(`${post.title}\n\n${post.content}\n\n--- ${replies.length} 条回复 ---`);
-    } catch (e) { console.warn(e); }
-}
-
-// ===================== 宠物档案 =====================
-async function loadPets() {
-    const container = document.getElementById('pets-container');
-    try {
-        const pets = await apiGet('/api/pets');
-        AppState.petCache = pets;
-        container.innerHTML = pets.map(p => `
-            <div class="pet-card card-glow card-shine" onclick="showPetDetail('${p.id}')">
-                <div class="pet-avatar">🐾</div>
-                <h3>${p.name}</h3>
-                <p class="pet-meta">${p.species || ''} · ${p.breed || ''}</p>
-                <p class="pet-meta">${p.gender || ''}</p>
-                ${p.vaccines && p.vaccines.length ?
-                    `<span class="pet-badge">💉 ${p.vaccines.length} 疫苗</span>` : ''}
-            </div>
-        `).join('');
-    } catch (e) {
-        container.innerHTML = `
-            <div class="pet-card card-glow">
-                <div class="pet-avatar">🐾</div>
-                <h3>示例宠物</h3>
-                <p class="pet-meta">DOG · 柯基</p>
-                <p class="pet-meta">MALE</p>
-            </div>`;
-    }
-}
-
-function showPetDetail(petId) {
-    alert(`宠物详情（${petId}）—— 这里可以打开一个详情弹窗显示疫苗时间轴、驱虫记录等`);
-}
-
-// ===================== 健康记录 + ECharts 趋势图 =====================
-async function loadHealthRecords() {
-    // 先尝试加载第一只宠物的趋势数据
-    const chartDom = document.getElementById('trend-chart');
-    if (chartDom && window.echarts) {
-        renderSampleTrendChart(chartDom);
-    }
-}
-
-/**
- * ECharts 体重趋势图模板
- * （这里先用示例数据渲染，后端 ready 后改成 fetch 实际数据）
- */
-function renderSampleTrendChart(dom) {
-    const chart = echarts.init(dom);
-    const days = ['5/1', '5/5', '5/10', '5/15', '5/20', '5/25', '5/27'];
-    const weights = [11.2, 11.5, 11.3, 11.7, 11.5, 11.8, 11.5];
-
-    chart.setOption({
-        title: { text: '🐾 豆豆 · 体重趋势（近 30 天）', left: 'center' },
-        tooltip: { trigger: 'axis' },
-        xAxis: { type: 'category', data: days },
-        yAxis: { type: 'value', name: 'kg', min: 10, max: 13 },
-        series: [{
-            name: '体重', type: 'line', data: weights,
-            smooth: true,
-            itemStyle: { color: '#FF8C42' },
-            areaStyle: { color: 'rgba(255,140,66,0.15)' },
-            markPoint: {
-                data: [
-                    { type: 'max', name: '最高' },
-                    { type: 'min', name: '最低' },
-                ]
-            }
-        }]
-    });
-
-    // 窗口 resize 时重绘
-    window.addEventListener('resize', () => chart.resize());
-}
-
-// ===================== AI 诊断 =====================
-// 说明（实际实现）：Key 从 localStorage('pethealth:llm-api-key') 读取，
-// 未配置时弹窗引导（可跳过走规则引擎）；返回 LLM 文本需 stripMarkdown() 去符号。
-async function submitDiagnosis() {
-    const petId = document.getElementById('diag-pet-select')?.value || '';
-    const symptoms = document.getElementById('diag-symptoms')?.value || '';
-    const duration = document.getElementById('diag-duration')?.value || '1天';
-    const resultBox = document.getElementById('ai-result');
-
-    if (!symptoms.trim()) {
-        showToast('请描述症状哦', 'error');
-        return;
-    }
-
-    resultBox.innerHTML = '<p class="loading">🤖 AI 正在分析中（约 5~30 秒，请勿重复点击）...</p>';
-
-    try {
-        const llmKey = localStorage.getItem('pethealth:llm-api-key') || '';
-        const headers = llmKey ? { 'X-LLM-Api-Key': llmKey } : null;
-        const data = await apiPost('/api/ai-diagnosis', {
-            petId, species: 'CAT', breed: '英短', ageMonths: 18,
-            symptoms, duration
-        }, headers);
-        // 后端返回的可能是 JSON 字符串（AI 返回），需要解析
-        const parsed = typeof data === 'string' ? JSON.parse(data) : data;
-
-        resultBox.innerHTML = `
-            <div class="ai-result-card">
-                <h4>📋 可能原因：</h4>
-                <ul>${parsed.possibleCauses?.map(c => `<li>🔸 <b>${c.name}</b>（概率：${c.probability}）— ${c.description || ''}</li>`).join('') || ''}</ul>
-                <h4>💡 建议：</h4>
-                <ol>${parsed.suggestions?.map(s => `<li>${s}</li>`).join('') || ''}</ol>
-                ${parsed.redFlags?.length ? `<h4>🚨 危险信号：</h4><ul>${parsed.redFlags.map(s => `<li class="red-flag">${s}</li>`).join('')}</ul>` : ''}
-                <p class="disclaimer">⚠️ ${parsed.disclaimer || '本建议仅供参考，不能替代兽医诊断'}</p>
-            </div>
-        `;
-    } catch (e) {
-        resultBox.innerHTML = `<p class="empty-hint">AI 调用失败：${e.message}</p>`;
-    }
-}
-
-// ===================== 营养助手 / 提醒 / 统计（简化版） =====================
-// 营养助手：选择宠物 → 请求后端聚合报告 → 渲染 RER/MER/喂食克数与体重趋势
-async function loadNutrition() {
-    const sel = document.getElementById('nt-pet-select');
-    const c = document.getElementById('nutrition-container');
-    if (!sel || !c) return;
-    if (!AppState.petCache.length) AppState.petCache = await apiGet('/api/pets');
-    sel.innerHTML = '<option value="">请选择宠物</option>' + AppState.petCache.map(p =>
-        `<option value="${p.id}">${p.name} · ${p.species || ''} · ${p.breed || ''}</option>`).join('');
-    await loadNutritionReport();
-}
-
-async function loadNutritionReport() {
-    const petId = document.getElementById('nt-pet-select')?.value;
-    const c = document.getElementById('nutrition-container');
-    if (!petId || !c) return;
-    const report = await apiGet(`/api/nutrition/${petId}`);
-    const calc = report.calculation;
-    c.innerHTML = calc
-        ? `<div class="card-glow nutrition-report">
-             <h3>${report.pet.name} · 每日营养需求</h3>
-             <p>RER ${Math.round(calc.rer)} kcal · 系数 ${calc.merFactor}（${calc.stageLabel}）
-                · MER ${Math.round(calc.mer)} kcal/天</p>
-             <p>主粮 380 kcal/100g 时每日喂食约
-                <b>${(Math.round(calc.mer / 3.8 * 10) / 10).toFixed(1)} g</b></p>
-             <p class="nutrition-disclaimer">参考 NRC 2006 / WSAVA 通用标准，实际需求因个体而异，请遵医嘱。</p>
-           </div>`
-        : `<div class="empty-hint">${report.notice || '暂无体重记录，暂无法计算'}</div>`;
-}
-
-async function loadReminders() {
-    const c = document.getElementById('reminders-container');
-    if (c) {
-        c.innerHTML = `
-            <div class="reminder-item">🔔 豆豆的狂犬疫苗 — 还有 3 天到期</div>
-            <div class="reminder-item">🔔 咪咪的驱虫 — 还有 12 天到期</div>
-            <div class="reminder-item">🔔 柯基的体检 — 本月待完成</div>`;
-    }
-}
-
-async function loadStatistics() {
-    const c = document.getElementById('stats-container');
-    if (c && c.children.length === 0) {
-        c.innerHTML = `
-            <div class="stat-card">🐾 我的宠物 <b>2</b></div>
-            <div class="stat-card">📝 健康记录 <b>128</b></div>
-            <div class="stat-card">🤖 AI 诊断 <b>15</b></div>
-            <div class="stat-card">💉 疫苗记录 <b>6</b></div>`;
-    }
-}
-
-// ===================== 工具函数 =====================
-function truncate(str, n) { return str.length > n ? str.slice(0, n) + '...' : str; }
-
-function showToast(msg, type = 'success') {
-    const toast = document.createElement('div');
-    toast.className = `toast toast-${type}`;
-    toast.textContent = msg;
-    document.body.appendChild(toast);
-    setTimeout(() => toast.remove(), 2500);
-}
-
-// ===================== 启动入口 =====================
-document.addEventListener('DOMContentLoaded', () => {
-    // 初始化 Lucide 图标
-    if (window.lucide) window.lucide.createIcons();
-    // 默认显示首页
-    showSection('home');
-    // 启动时加载一次用户状态（cookie / localStorage）
-    const cached = localStorage.getItem('pethealth_user');
-    if (cached) {
-        try { AppState.currentUser = JSON.parse(cached); updateUserSection(); } catch (e) {}
-    }
-});
+app.mount('#app')
 ```
 
-### 9.7 styles.css 核心样式骨架
+**状态管理（Pinia Stores）：**
 
-**文件位置**: `pethealth-web/src/main/resources/static/styles.css`
+- `stores/user.ts` — 用户状态：`login()` / `register()` / `logout()` / `fetchMe()` / `updateProfile()` / `clear()`
+- `stores/pets.ts` — 宠物缓存：`loadPets()` / `refreshPet()` / `clear()`
+- `composables/useUnreadBadge.ts` — 未读消息徽标（跨组件共享 ref）
+
+**API 封装（api/index.ts）：**
+
+```typescript
+import axios from 'axios'
+
+const instance = axios.create({
+  baseURL: '',
+  withCredentials: true, // 携带 HttpOnly Cookie
+  headers: { 'Content-Type': 'application/json' },
+})
+
+// 响应拦截：处理 ApiResponse 结构 { code, message, data }
+instance.interceptors.response.use(
+  (response) => {
+    const json = response.data
+    if (json && typeof json === 'object' && 'code' in json) {
+      if (json.code !== 200) {
+        return Promise.reject(new Error(json.message || '请求失败'))
+      }
+      return json.data
+    }
+    return json
+  },
+  (error) => {
+    if (error.response?.status === 401) {
+      onUnauthorized?.()
+      return Promise.reject(new Error('登录已失效，请重新登录'))
+    }
+    const status = error.response?.status
+    const msg = error.response?.data?.message || `HTTP ${status || 'unknown'}`
+    return Promise.reject(new Error(msg))
+  }
+)
+
+export const apiGet = <T>(url: string) => instance.get(url) as Promise<T>
+export const apiPost = <T>(url: string, body?: any) => instance.post(url, body) as Promise<T>
+export const apiPut = <T>(url: string, body?: any) => instance.put(url, body) as Promise<T>
+export const apiDelete = <T>(url: string) => instance.delete(url) as Promise<T>
+```
+
+### 9.7 全局样式（global.css）
+
+**文件位置**: `pethealth-web/frontend/src/styles/global.css`
 
 ```css
-/* ===================== CSS 变量（主题色） ===================== */
+/* ===================== CSS 变量（色彩系统） ===================== */
 :root {
-    --primary: #FF8C42;        /* 温暖橙 — 主色 */
-    --primary-dark: #E67329;
-    --success: #4CAF50;        /* 健康绿 */
-    --info: #4A90D9;           /* 温馨蓝 */
+    --primary: #3873B6;          /* 主色（深海军蓝） */
+    --primary-dark: #2A5A8F;     /* 主色加深 */
+    --primary-light: #E8F0FE;    /* 浅蓝底 */
+    --accent: #6DA1D8;           /* 辅助色 — 强调/链接/选中 */
+    --success: #4CAF50;          /* 健康绿 */
     --warning: #FFC107;
-    --danger: #F44336;
-    --bg: #FFF8F0;             /* 暖米色背景 */
+    --danger: #E05252;
+    --bg: #F5F7FA;               /* 页面浅色背景 */
     --card-bg: #FFFFFF;
-    --text: #333333;
-    --text-light: #777777;
-    --border: #EEE5D9;
-    --radius: 12px;
-    --shadow: 0 2px 12px rgba(255, 140, 66, 0.08);
-    --shadow-hover: 0 6px 20px rgba(255, 140, 66, 0.18);
+    --text: #3873B6;             /* 主文字 */
+    --text-muted: rgba(56,115,182,0.72);
+    --text-light: rgba(56,115,182,0.62);
+    --border: #E6EBF2;
+    --border-light: #EEF1F6;
+    --radius: 16px;
+    --shadow: 0 4px 20px rgba(56,115,182,0.08);
+    --shadow-hover: 0 8px 40px rgba(56,115,182,0.12);
+    --font-serif: 'Instrument Serif', Georgia, serif;
+    --font-sans: 'Helvetica Neue', -apple-system, BlinkMacSystemFont,
+                 "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
 }
 
 /* ===================== 全局 ===================== */
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-                 "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-    background: var(--bg);
-    color: var(--text);
-    line-height: 1.6;
-    min-height: 100vh;
+html { scroll-behavior: smooth; }
+
+/* ===================== Lucide 图标基础样式 ===================== */
+svg.lucide {
+    width: 1em; height: 1em;
+    vertical-align: -0.125em;
+    flex-shrink: 0;
 }
+/* 图标容器尺寸适配 */
+.timeline-dot svg.lucide { width: 0.95rem; height: 0.95rem; }
+.pet-avatar svg.lucide { width: 2.2rem; height: 2.2rem; vertical-align: 0; }
+.pet-detail-avatar svg.lucide { width: 3rem; height: 3rem; vertical-align: 0; }
+.notif-icon svg.lucide { width: 1.2rem; height: 1.2rem; vertical-align: -0.2em; }
+.reminder-icon svg.lucide { width: 1rem; height: 1rem; vertical-align: -0.15em; }
+.hr-record-icon svg.lucide { width: 1.4rem; height: 1.4rem; vertical-align: -0.25em; }
+.tab-btn svg.lucide { vertical-align: -0.15em; }
 
 /* ===================== 头部导航栏 ===================== */
 header {
@@ -2764,7 +2513,6 @@ header {
     height: 64px;
 }
 .logo h1 { font-size: 1.3rem; }
-.logo .tagline { font-size: 0.75rem; opacity: 0.85; }
 nav ul { display: flex; gap: 0.5rem; list-style: none; }
 nav a {
     color: rgba(255,255,255,0.9);
@@ -2782,8 +2530,7 @@ main {
     margin: 2rem auto;
     padding: 0 2rem;
 }
-main > section { display: none; }            /* 默认隐藏所有 section */
-main > section.active { display: block; }    /* 当前激活的 section 显示 */
+main > section { display: block; }   /* Vue Router 接管视图切换，无需手动隐藏 */
 section h2 {
     font-size: 1.6rem;
     margin-bottom: 1.5rem;
@@ -2804,322 +2551,131 @@ section h2 {
     box-shadow: var(--shadow-hover);
     transform: translateY(-2px);
 }
-.card-shine {
-    position: relative; overflow: hidden;
-}
-.card-shine::after {
-    content: '';
-    position: absolute; top: -50%; left: -50%;
-    width: 200%; height: 200%;
-    background: linear-gradient(45deg, transparent 40%,
-                    rgba(255,255,255,0.15) 50%, transparent 60%);
-    transform: translateX(-100%);
-    transition: transform 0.6s;
-}
-.card-shine:hover::after { transform: translateX(100%); }
-
-/* ===================== 帖子卡片 ===================== */
-.post-card { margin-bottom: 1rem; }
-.post-header {
-    display: flex; justify-content: space-between;
-    font-size: 0.8rem; color: var(--text-light);
-    margin-bottom: 0.5rem;
-}
-.post-category {
-    background: var(--primary); color: white;
-    padding: 0.15rem 0.6rem; border-radius: 12px; font-size: 0.75rem;
-}
-.post-title { font-size: 1.15rem; margin-bottom: 0.5rem; cursor: pointer; }
-.post-content { color: var(--text-light); font-size: 0.9rem; margin-bottom: 0.75rem; }
-.post-meta {
-    display: flex; gap: 1rem; font-size: 0.85rem; color: var(--text-light);
-    align-items: center;
-}
-
-/* ===================== 宠物卡片网格 ===================== */
-.pet-card {
-    text-align: center; cursor: pointer;
-    transition: all 0.2s;
-}
-.pet-avatar { font-size: 2.5rem; margin-bottom: 0.5rem; }
-.pet-meta { font-size: 0.85rem; color: var(--text-light); }
-.pet-badge {
-    display: inline-block;
-    background: var(--info); color: white;
-    padding: 0.2rem 0.7rem; border-radius: 12px; font-size: 0.75rem;
-    margin-top: 0.5rem;
-}
-.pets-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-    gap: 1rem;
-}
-
-/* ===================== 网格布局 ===================== */
-.dashboard-grid {
-    display: grid;
-    grid-template-columns: 2fr 1fr;
-    gap: 1.5rem;
-}
-.stat-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-    gap: 1rem;
-}
-.stat-card {
-    background: var(--card-bg); border-radius: var(--radius);
-    padding: 1.5rem; text-align: center; box-shadow: var(--shadow);
-}
-.stat-card b { font-size: 2rem; color: var(--primary); margin-left: 0.5rem; }
 
 /* ===================== 按钮 ===================== */
 .btn {
-    padding: 0.5rem 1.25rem; border: none; border-radius: 20px;
-    cursor: pointer; font-size: 0.85rem; font-weight: 500;
-    transition: background 0.2s, transform 0.15s;
+    padding: 0.5rem 1.2rem; border-radius: 8px; border: none;
+    font-size: 0.9rem; cursor: pointer; transition: all 0.2s;
 }
-.btn:hover { transform: translateY(-1px); }
-.btn-primary   { background: var(--primary);   color: white; }
-.btn-primary:hover   { background: var(--primary-dark); }
-.btn-secondary { background: white; border: 1px solid var(--border); color: var(--text); }
-.btn-secondary:hover { background: var(--border); }
-.btn-tiny      { padding: 0.2rem 0.7rem; font-size: 0.75rem; }
-.full-width    { width: 100%; }
-
-/* ===================== Modal ===================== */
-.modal {
-    position: fixed; top: 0; left: 0;
-    width: 100%; height: 100%;
-    background: rgba(0,0,0,0.5);
-    display: flex; align-items: center; justify-content: center;
-    z-index: 1000;
-    animation: fadeIn 0.2s;
-}
-.modal-content {
-    background: white; padding: 2rem;
-    border-radius: var(--radius);
-    width: 360px; position: relative;
-    box-shadow: var(--shadow-hover);
-}
-.modal-content h3 { margin-bottom: 1rem; color: var(--primary); }
-.modal-close {
-    position: absolute; top: 0.75rem; right: 0.75rem;
-    background: none; border: none; font-size: 1.2rem; cursor: pointer;
-}
-.modal-hint {
-    font-size: 0.75rem; color: var(--text-light); text-align: center;
-    margin-top: 0.5rem;
-}
+.btn-primary { background: var(--primary); color: white; }
+.btn-primary:hover { background: var(--primary-dark); }
+.btn-secondary { background: transparent; border: 1px solid var(--border); color: var(--text); }
+.btn-secondary:hover { background: var(--border-light); }
+.btn-danger { background: var(--danger); color: white; }
+.btn-tiny { font-size: 0.78rem; padding: 0.25rem 0.55rem; border-radius: 6px; }
 
 /* ===================== 表单 ===================== */
 .form-group { margin-bottom: 1rem; }
-.form-group label {
-    display: block; font-size: 0.85rem; margin-bottom: 0.3rem;
-    color: var(--text-light);
-}
+.form-group label { display: block; margin-bottom: 0.3rem; font-size: 0.9rem; color: var(--text); }
 .form-group input, .form-group select, .form-group textarea {
-    width: 100%; padding: 0.6rem 0.9rem;
-    border: 1px solid var(--border); border-radius: 8px;
-    font-size: 0.9rem; background: var(--bg);
-    transition: border-color 0.2s;
+    width: 100%; padding: 0.5rem 0.75rem; border: 1px solid var(--border);
+    border-radius: 8px; font-size: 0.9rem; color: var(--text);
 }
-.form-group input:focus, .form-group textarea:focus {
-    outline: none; border-color: var(--primary); background: white;
+.form-group input:focus, .form-group select:focus, .form-group textarea:focus {
+    outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(109,161,216,0.15);
 }
 
-/* ===================== Toast ===================== */
-.toast {
-    position: fixed; top: 80px; left: 50%;
-    transform: translateX(-50%);
-    padding: 0.6rem 1.5rem; border-radius: 20px;
-    color: white; font-size: 0.9rem; z-index: 2000;
-    animation: slideDown 0.25s;
+/* ===================== 模态框 ===================== */
+.modal {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.4);
+    display: flex; align-items: center; justify-content: center; z-index: 1000;
 }
-.toast-success { background: var(--success); }
-.toast-error   { background: var(--danger); }
-
-/* ===================== AI 诊断结果卡 ===================== */
-.ai-result-card {
-    background: var(--card-bg); border-radius: var(--radius);
-    padding: 1.5rem; box-shadow: var(--shadow); margin-top: 1rem;
+.modal-content {
+    background: white; border-radius: var(--radius); padding: 1.5rem;
+    max-width: 500px; width: 90%; max-height: 80vh; overflow-y: auto;
+    position: relative;
+    animation: modalPop 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
-.ai-result-card h4 { margin: 1rem 0 0.5rem; color: var(--primary); }
-.ai-result-card ul, .ai-result-card ol { padding-left: 1.2rem; }
-.ai-result-card li { margin-bottom: 0.3rem; }
-.red-flag { color: var(--danger); font-weight: 500; }
-.disclaimer {
-    margin-top: 1rem; font-size: 0.8rem; color: var(--text-light);
-    padding-top: 1rem; border-top: 1px dashed var(--border);
-}
-.loading { text-align: center; padding: 2rem; color: var(--text-light); }
-.empty-hint {
-    text-align: center; padding: 2rem;
-    color: var(--text-light); font-style: italic;
+.modal-content-wide { max-width: 700px; }
+.modal-close {
+    position: sticky; top: 0; float: right;
+    background: none; border: none; font-size: 1.2rem; cursor: pointer;
+    color: var(--text-light); padding: 0.25rem;
 }
 
-/* ===================== 热门榜 ===================== */
-.hot-post-item {
-    padding: 0.5rem 0.75rem; margin-bottom: 0.3rem;
-    border-radius: 8px; cursor: pointer;
-    display: flex; gap: 0.5rem; align-items: center;
-    transition: background 0.2s;
+/* ===================== 路由切换动画 ===================== */
+.section-fade-enter-active {
+    animation: fadeSlideUp 0.55s cubic-bezier(0.16, 1, 0.3, 1);
 }
-.hot-post-item:hover { background: var(--bg); }
-.hot-rank { color: var(--primary); }
-.hot-title { flex: 1; font-size: 0.85rem; }
-.hot-meta { font-size: 0.75rem; color: var(--text-light); }
-
-/* ===================== 提醒列表 ===================== */
-.reminder-item {
-    padding: 0.75rem 1rem; margin-bottom: 0.5rem;
-    background: white; border-radius: 8px;
-    display: flex; gap: 0.5rem; align-items: center;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+.section-fade-leave-active {
+    animation: fadeIn 0.15s reverse;
 }
 
-/* ===================== 图表容器 ===================== */
-#trend-chart {
-    width: 100%; height: 400px;
-    background: var(--card-bg); border-radius: var(--radius);
-    box-shadow: var(--shadow);
-}
-
-/* ===================== 响应式 ===================== */
-@media (max-width: 768px) {
-    .dashboard-grid { grid-template-columns: 1fr; }
-    nav ul { gap: 0.25rem; flex-wrap: wrap; }
-    nav a { padding: 0.3rem 0.5rem; font-size: 0.8rem; }
-    .header-container { height: auto; padding: 0.5rem 1rem; flex-wrap: wrap; }
-}
-
-/* ===================== 动画 ===================== */
+/* ===================== 动画关键帧 ===================== */
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-@keyframes slideDown { from { transform: translate(-50%, -20px); opacity: 0; }
-                        to   { transform: translate(-50%, 0);       opacity: 1; } }
+@keyframes fadeSlideUp {
+    from { opacity: 0; transform: translateY(18px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes modalPop {
+    from { opacity: 0; transform: translateY(14px) scale(0.98); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ===================== 滚动条 ===================== */
+.timeline, .modal-content, .notifications-list {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(56,115,182,0.25) transparent;
+    scrollbar-gutter: stable;
+}
 ```
 
-### 9.8 index.html 骨架（本地静态资源引用）
+### 9.8 index.html（Vite 构建入口）
 
-> ECharts / Lucide 均**随 jar 打包在 `static/lib/` 本地提供**，不引用任何国外 CDN
-> （jsdelivr / unpkg 在大陆访问不稳定会导致图表空白、图标丢失）。
+**文件位置**: `pethealth-web/frontend/index.html`
 
-**文件位置**: `pethealth-web/src/main/resources/static/index.html`
+Vite 开发入口 HTML，构建后由 Spring Boot 托管：
 
 ```html
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🐾 PetHealth · 宠物健康管家</title>
-
-    <!-- 图表库 ECharts（本地化） -->
-    <script src="lib/echarts.min.js"></script>
-    <!-- 图标库 Lucide（本地化 UMD 1.47.0） -->
-    <script src="lib/lucide.min.js"></script>
-
-    <!-- 核心样式（9.7 节的完整 CSS 内容直接粘到 styles.css 里） -->
-    <link rel="stylesheet" href="styles.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PetHealth · 宠物健康管家</title>
+  <!-- 品牌字体 Instrument Serif（Logo） -->
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
 </head>
 <body>
-    <!-- 9.5 节的导航栏 HTML 粘到这里 -->
-
-    <main>
-        <!-- ====== 首页 ====== -->
-        <section id="home" class="active">
-            <h2>🏠 首页</h2>
-            <div class="dashboard-grid">
-                <div class="card-glow">
-                    <h3>🐾 我的宠物</h3>
-                    <div id="home-pets" class="pets-grid"></div>
-                </div>
-                <div>
-                    <div class="card-glow" style="margin-bottom:1rem">
-                        <h3>🔥 热门社区</h3>
-                        <div id="hot-posts-list"></div>
-                    </div>
-                    <div class="card-glow">
-                        <h3>⏰ 即将到期提醒</h3>
-                        <div id="due-reminders-list"></div>
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <!-- ====== 宠物档案 ====== -->
-        <section id="pets">
-            <h2>🐾 宠物档案</h2>
-            <div id="pets-container" class="pets-grid"></div>
-        </section>
-
-        <!-- ====== 健康记录 ====== -->
-        <section id="health-records">
-            <h2>📊 健康记录</h2>
-            <div id="trend-chart"></div>
-        </section>
-
-        <!-- ====== AI 健康助手 ====== -->
-        <section id="ai-diagnosis">
-            <h2>🤖 AI 健康助手</h2>
-            <div class="card-glow">
-                <div class="form-group">
-                    <label>选择宠物</label>
-                    <select id="diag-pet-select">
-                        <option value="">（示例）豆豆 · 英短 · 18个月</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>描述症状</label>
-                    <textarea id="diag-symptoms" rows="4"
-                        placeholder="例如：今天没精神，不爱动，也不太吃东西，还偶尔打喷嚏"></textarea>
-                </div>
-                <div class="form-group">
-                    <label>持续时间</label>
-                    <select id="diag-duration">
-                        <option>半天</option><option selected>1天</option>
-                        <option>2-3天</option><option>一周以上</option>
-                    </select>
-                </div>
-                <button class="btn btn-primary" onclick="submitDiagnosis()">🔍 开始 AI 诊断</button>
-                <div id="ai-result"></div>
-            </div>
-        </section>
-
-        <!-- ====== 社区 ====== -->
-        <section id="community">
-            <h2>💬 宠物社区</h2>
-            <div id="posts-container"></div>
-        </section>
-
-        <!-- ====== 营养助手 ====== -->
-        <section id="nutrition">
-            <h2>🥗 营养助手</h2>
-            <select id="nt-pet-select" onchange="loadNutritionReport()">
-                <option value="">请选择宠物</option>
-            </select>
-            <div id="nutrition-container"></div>
-        </section>
-
-        <!-- ====== 提醒 ====== -->
-        <section id="reminders">
-            <h2>⏰ 提醒中心</h2>
-            <div id="reminders-container"></div>
-        </section>
-
-        <!-- ====== 统计 ====== -->
-        <section id="statistics">
-            <h2>📈 统计</h2>
-            <div id="stats-container" class="stat-grid"></div>
-        </section>
-    </main>
-
-    <!-- 核心脚本（9.6 节的完整 JS 内容直接粘到 script.js 里） -->
-    <script src="script.js"></script>
+  <div id="app"></div>
+  <script type="module" src="/src/main.ts"></script>
 </body>
 </html>
 ```
 
----
+**Vite 配置（vite.config.ts）：**
+
+```typescript
+import { defineConfig } from 'vite'
+import vue from '@vitejs/plugin-vue'
+import { fileURLToPath, URL } from 'node:url'
+
+// 后端 static 目录（构建产物输出目标，由 Spring Boot 托管）
+const STATIC_DIR = fileURLToPath(
+  new URL('../src/main/resources/static', import.meta.url)
+)
+
+export default defineConfig({
+  plugins: [vue()],
+  resolve: {
+    alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
+  },
+  server: {
+    port: 5173,
+    // 开发期把后端 API 请求代理到本地 Spring Boot（默认 8080）
+    proxy: {
+      '/api': { target: 'http://localhost:8080', changeOrigin: true },
+    },
+  },
+  build: {
+    // 构建产物直接写入后端 static 目录，由 Spring Boot 托管
+    outDir: STATIC_DIR,
+    emptyOutDir: true,
+    chunkSizeWarningLimit: 1500,
+  },
+})
+```
+
 
 ## 10. 配置文件模板
 
@@ -3489,16 +3045,16 @@ mvn spring-boot:run -pl pethealth-web
 **手动启动步骤**
 ```
 # ① 前置依赖（12.1）
-& "C:\Program Files\MongoDB\Server\8.2\bin\mongod.exe" --config "f:\code\pet-health\mongod.cfg"   # MongoDB 27017
-redis-server                                                                                       # Redis 6379（已在跑可跳过）
+& "D:\MongoDB\mongodb-8.2.0\mongodb-win32-x86_64-windows-8.2.0\bin\mongod.exe" --dbpath "D:\MongoDB\data" --port 27017 --bind_ip localhost  # MongoDB 27017
+& "D:\Redis\redis-server.exe" --port 6379 --bind 127.0.0.1                                                                                   # Redis 6379（已在跑可跳过）
 
 # ② 微服务 Provider（12.2 Step 1）— 3 个终端分别执行
-cd f:\code\pet-health\pet-service            ; mvn spring-boot:run -DskipTests   # 8081
-cd f:\code\pet-health\health-record-service  ; mvn spring-boot:run -DskipTests   # 8086
-cd f:\code\pet-health\reminder-service       ; mvn spring-boot:run -DskipTests   # 8084
+cd d:\code\pet-health\pet-service            ; mvn spring-boot:run -DskipTests   # 8081
+cd d:\code\pet-health\health-record-service  ; mvn spring-boot:run -DskipTests   # 8086
+cd d:\code\pet-health\reminder-service       ; mvn spring-boot:run -DskipTests   # 8084
 
 # ③ 主 Web（12.2 Step 2）
-cd f:\code\pet-health
+cd d:\code\pet-health
 mvn spring-boot:run -pl pethealth-web                                                 # 8080
 
 # ④ 浏览器打开 http://localhost:8080
@@ -3673,11 +3229,15 @@ ufw --force enable
 # - 自定义 TCP  22    你的本地IP/32  (SSH，限制来源更安全)
 ```
 
-#### Step 3 — Maven 打包（在本地 Windows 执行）
+#### Step 3 — 前端构建 + Maven 打包（在本地 Windows 执行）
 
 ```powershell
-# 本地 Windows PowerShell，进入 pethealth-web 目录
-cd F:\code\ydyy\lab11\pethealth-web
+# 1. 构建 Vue 前端（输出到 pethealth-web/src/main/resources/static）
+cd F:\code\pet-health\pethealth-web\frontend
+npm run build
+
+# 2. Maven 打包（static 目录已包含最新前端产物）
+cd F:\code\pet-health\pethealth-web
 mvn clean package -DskipTests
 
 # 打包完成后，jar 文件在 target/ 目录下
@@ -4025,7 +3585,7 @@ crontab -e
 - [ ] 写 PetProfile 实体 + PetProfileRepository（参考第 5.1 节完整代码，嵌套数组先写空 List）
 - [ ] 写 HealthRecord 实体 + HealthRecordRepository（参考第 5.2 节）
 - [ ] Controller 层：UserController、PostController、ReplyController、CommentController、LikeController、PetController、HealthRecordController
-- [ ] 前端三件套：根据第 9.5-9.8 节完整代码创建 index.html / script.js / styles.css（直接复制粘贴，改一下标题和 logo）
+- [ ] Vue3 前端：根据第 9.5-9.8 节完整代码创建 frontend/ 目录（Vite + Vue3 + TS + Pinia + Router + axios + vue-echarts + lucide-vue-next）
 - [ ] 配置好 MongoDB + Redis（第 10.1 节的 application.yml），启动 pethealth-web，浏览器访问 http://localhost:8080
 - [ ] **验证：** 能注册登录（demo/123456）、发帖回复点赞、看到首页热门榜、ECharts 示例图表能显示
 
@@ -4038,7 +3598,7 @@ crontab -e
 
 - [ ] 在 `health-record-service/` 下创建独立 Maven 模块（第 3.1 节目录结构）
 - [ ]  以实际 `AIDiagnosisDubboServiceImpl` 为准（8.2 仅设计参考）
-- [ ] 把第 9.6 节的 AI 诊断 UI 粘到 index.html 里，调用 `/api/ai-diagnosis`（另需"设置 API Key"弹窗 + localStorage）
+- [ ] 在 Vue 前端 AiDiagnosisView.vue 中实现 AI 诊断 UI，调用 `/api/ai-diagnosis`（含"设置 API Key"弹窗 + localStorage 管理）
 - [ ] 写 `AIDiagnosisController`，经 Dubbo 调 `diagnose(..., apiKey)`
 - [ ] **验证：** 输入"我家猫今天没精神，不爱动"，配置 Key 时约 5~30 秒返回纯文本 AI 分析；未配置 Key 时正常返回规则引擎结果（不报错）
 
